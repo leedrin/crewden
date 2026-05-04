@@ -247,6 +247,30 @@ describe('POST /api/agents', () => {
     expect(res.json().error).toContain("Runtime 'gemini'");
     await app.close();
   });
+
+  it('accepts opencode runtime in paseo mode', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/agents',
+      payload: { name: 'opencode-agent', runtime: 'opencode' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().runtime).toBe('opencode');
+    await app.close();
+  });
+
+  it('accepts pi runtime in paseo mode', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/agents',
+      payload: { name: 'pi-agent', runtime: 'pi' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().runtime).toBe('pi');
+    await app.close();
+  });
 });
 
 describe('PATCH /api/agents/:id', () => {

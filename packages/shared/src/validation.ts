@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const RuntimeIdSchema = z.enum(['claude', 'codex', 'gemini']);
+export const RuntimeIdSchema = z.enum(['claude', 'codex', 'gemini', 'opencode', 'pi']);
 
 export const AgentStatusSchema = z.enum(['inactive', 'starting', 'running', 'working', 'idle', 'error']);
 

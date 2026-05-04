@@ -1,6 +1,6 @@
 import type { VersionInfo } from './version.js';
 
-export type RuntimeId = 'claude' | 'codex' | 'gemini';
+export type RuntimeId = 'claude' | 'codex' | 'gemini' | 'opencode' | 'pi';
 
 export type AgentStatus = 'inactive' | 'starting' | 'running' | 'working' | 'idle' | 'error';
 

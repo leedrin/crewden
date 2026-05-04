@@ -37,7 +37,7 @@ export function AgentPanel({ agents, machines, runtimeStatus, onAgentsChange, on
   const [form, setForm] = useState({
     name: '',
     displayName: '',
-    runtime: 'claude' as 'claude' | 'codex' | 'gemini',
+    runtime: 'claude' as 'claude' | 'codex' | 'gemini' | 'opencode' | 'pi',
     model: '',
     systemPrompt: '',
     machineId: '',
@@ -414,6 +414,8 @@ export function AgentPanel({ agents, machines, runtimeStatus, onAgentsChange, on
             >
               <option value="claude">CLAUDE</option>
               <option value="codex">CODEX</option>
+              <option value="opencode">OPENCODE</option>
+              <option value="pi">PI</option>
               <option value="gemini">GEMINI</option>
             </select>
             <FieldLabel>MODEL (OPTIONAL)</FieldLabel>
@@ -512,7 +514,13 @@ function AgentCard({ agent, onStart, onStop, onDelete }: { agent: Agent; onStart
     : agent.status === 'error' ? '#f44336'
     : '#ccc';
 
-  const runtimeBg: Record<string, string> = { claude: '#e8f0ff', codex: '#e8f5e9', gemini: '#fff8e1' };
+  const runtimeBg: Record<string, string> = {
+    claude: '#e8f0ff',
+    codex: '#e8f5e9',
+    opencode: '#fff5e6',
+    pi: '#f3e8ff',
+    gemini: '#fff8e1',
+  };
 
   return (
     <div style={{

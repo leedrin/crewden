@@ -306,7 +306,7 @@ function formatMachineLabel(machineId?: string, machine?: Machine): string {
 }
 
 function RuntimeSelect({ value, machine, busy, onChange }: { value: string; machine?: Machine; busy: boolean; onChange: (value: string) => void }) {
-  const runtimes = ['claude', 'codex', 'gemini'];
+  const runtimes = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
   return (
     <label style={{ display: 'grid', gap: 4, fontSize: 11, fontWeight: 700 }}>
       RUNTIME

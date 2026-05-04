@@ -3,11 +3,14 @@ import { getStore } from "../db.js";
 import { eventBus } from "../events.js";
 
 export function isRuntimeSupported(runtime: RuntimeId): boolean {
-  return runtime === "claude" || runtime === "codex";
+  return runtime === "claude" || runtime === "codex" || runtime === "opencode" || runtime === "pi";
 }
 
 export function unsupportedRuntimeError(runtime: RuntimeId): string {
-  return `Runtime '${runtime}' is not supported in Paseo mode. Please use claude or codex.`;
+  if (runtime === "gemini") {
+    return `Runtime '${runtime}' is not supported in Paseo mode yet.`;
+  }
+  return `Runtime '${runtime}' is not supported in Paseo mode. Please use claude, codex, opencode, or pi.`;
 }
 
 export async function markUnsupportedRuntime(agent: Agent, source: string): Promise<void> {

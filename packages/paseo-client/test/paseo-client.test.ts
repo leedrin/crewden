@@ -282,6 +282,14 @@ describe("runtime-mapper", () => {
     expect(mapRuntimeToProvider("codex")).toBe("codex");
   });
 
+  it("maps opencode to opencode", () => {
+    expect(mapRuntimeToProvider("opencode")).toBe("opencode");
+  });
+
+  it("maps pi to pi", () => {
+    expect(mapRuntimeToProvider("pi")).toBe("pi");
+  });
+
   it("throws for gemini", () => {
     expect(() => mapRuntimeToProvider("gemini")).toThrow("not supported");
   });
@@ -289,6 +297,8 @@ describe("runtime-mapper", () => {
   it("supportsRuntime returns correct values", () => {
     expect(supportsRuntime("claude")).toBe(true);
     expect(supportsRuntime("codex")).toBe(true);
+    expect(supportsRuntime("opencode")).toBe(true);
+    expect(supportsRuntime("pi")).toBe(true);
     expect(supportsRuntime("gemini")).toBe(false);
   });
 });

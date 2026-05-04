@@ -256,6 +256,8 @@ describe('RuntimeId validation', () => {
     expect(RuntimeIdSchema.safeParse('claude').success).toBe(true);
     expect(RuntimeIdSchema.safeParse('codex').success).toBe(true);
     expect(RuntimeIdSchema.safeParse('gemini').success).toBe(true);
+    expect(RuntimeIdSchema.safeParse('opencode').success).toBe(true);
+    expect(RuntimeIdSchema.safeParse('pi').success).toBe(true);
   });
 
   it('rejects invalid runtime', () => {

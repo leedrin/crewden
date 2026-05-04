@@ -6,6 +6,10 @@ export function mapRuntimeToProvider(runtime: RuntimeId): string {
       return "claude";
     case "codex":
       return "codex";
+    case "opencode":
+      return "opencode";
+    case "pi":
+      return "pi";
     case "gemini":
       throw new Error(
         "Gemini runtime is not supported in Paseo mode. Use local daemon mode instead.",
@@ -14,5 +18,5 @@ export function mapRuntimeToProvider(runtime: RuntimeId): string {
 }
 
 export function supportsRuntime(runtime: RuntimeId): boolean {
-  return runtime === "claude" || runtime === "codex";
+  return runtime === "claude" || runtime === "codex" || runtime === "opencode" || runtime === "pi";
 }
