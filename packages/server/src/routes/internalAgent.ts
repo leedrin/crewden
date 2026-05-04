@@ -43,7 +43,7 @@ import { delegateAgent } from '../delegation.js';
 import { buildOpenTaskSummary, notifyTaskAssignee } from '../taskDelivery.js';
 import { matchesAgentCapability } from '../taskMatching.js';
 import { archiveGoal } from './knowledge.js';
-import { validateAgentRuntimePatch } from '../agentRuntimePatch.js';
+import { validateAgentPatch } from '../runtime/validate-agent-patch.js';
 import { deliverToAgent } from '../runtime/delivery.js';
 
 export async function internalAgentRoutes(app: FastifyInstance) {
@@ -96,7 +96,7 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     if (!target) return reply.status(404).send({ error: 'Target agent not found' });
     const parsed = PatchAgentRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
-    const runtimeError = await validateAgentRuntimePatch(target, parsed.data, (machineId) => store.getMachine(machineId));
+    const runtimeError = validateAgentPatch(target, parsed.data);
     if (runtimeError) return reply.status(runtimeError.statusCode).send({ error: runtimeError.error });
     const updated = await store.updateAgent(target.id, parsed.data);
     if (updated) {

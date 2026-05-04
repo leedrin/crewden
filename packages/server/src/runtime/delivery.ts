@@ -11,10 +11,6 @@ export type DeliverToAgentParams = {
 
 /**
  * Runtime delivery seam used by route handlers.
- *
- * Current implementation still routes through legacy daemonRegistry.
- * This function exists so callers can stop depending on transport details
- * before switching to Paseo runtime in later phases.
  */
 export async function deliverToAgent(params: DeliverToAgentParams): Promise<boolean> {
   const { target, seq, channelId, message, inboxSummary } = params;

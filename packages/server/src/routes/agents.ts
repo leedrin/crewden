@@ -5,7 +5,7 @@ import { eventBus } from '../events.js';
 import { CreateAgentDelegationRequestSchema, CreateAgentRequestSchema, CreateDirectMessageRequestSchema, CreateReminderRequestSchema, PatchAgentRequestSchema, PatchReminderRequestSchema, type Agent, type DirectMessage } from '@crewden/shared';
 import { delegateAgent } from '../delegation.js';
 import { buildOpenTaskSummary } from '../taskDelivery.js';
-import { validateAgentRuntimePatch } from '../agentRuntimePatch.js';
+import { validateAgentPatch } from '../runtime/validate-agent-patch.js';
 import { paseoRuntimeService } from '../runtime/paseo-runtime-service.js';
 
 export async function agentRoutes(app: FastifyInstance) {
@@ -110,7 +110,7 @@ export async function agentRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
     }
-    const runtimeError = await validateAgentRuntimePatch(agent, parsed.data, (machineId) => store.getMachine(machineId));
+    const runtimeError = validateAgentPatch(agent, parsed.data);
     if (runtimeError) return reply.status(runtimeError.statusCode).send({ error: runtimeError.error });
     const updated = await store.updateAgent(agent.id, parsed.data);
     if (updated) {
@@ -198,7 +198,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const store = getStore();
     const agent = await store.getAgent(req.params.id);
     if (!agent) return reply.status(404).send({ error: 'Agent not found' });
-    const machineId = await paseoRuntimeService.resolveStartMachineId(agent);
+    const machineId = paseoRuntimeService.resolveStartMachineId(agent);
     if (!machineId) return reply.status(503).send({ error: 'No connected machine available for agent runtime' });
 
     const launchId = nanoid();

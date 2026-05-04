@@ -1,6 +1,6 @@
 import type { Agent, AgentDelivery, AgentRuntimeConfig, WorkspaceEntry, WorkspaceError } from '@crewden/shared';
 
-export type RuntimeMode = 'paseo-daemon' | 'legacy-local';
+export type RuntimeMode = 'paseo-daemon';
 
 export type RuntimeStatusSnapshot = {
   configuredMode: RuntimeMode;

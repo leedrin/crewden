@@ -21,8 +21,8 @@ export type WorkspaceEntry =
 export type AgentDelegation = { id: string; fromAgentId: string; toAgentId: string; content: string; status: 'queued' | 'delivered' | 'started' | 'failed'; error?: string; createdAt: string };
 export type Machine = { id: string; hostname: string; os: string; runtimes: string[]; status: string; connectedAt: string };
 export type RuntimeStatus = {
-  mode: 'paseo-daemon' | 'legacy-local';
-  configuredMode: 'paseo-daemon' | 'legacy-local';
+  mode: 'paseo-daemon';
+  configuredMode: 'paseo-daemon';
   connected: boolean;
   fallbackReason?: string;
 };

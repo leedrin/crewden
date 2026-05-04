@@ -77,7 +77,7 @@ export async function delegateAgent(input: {
     return delegation;
   }
 
-  const machineId = await paseoRuntimeService.resolveStartMachineId(target);
+  const machineId = paseoRuntimeService.resolveStartMachineId(target);
   if (!machineId) {
     delegation = await updateDelegation(delegation.id, 'failed', 'No connected machine available for agent runtime');
     return delegation;

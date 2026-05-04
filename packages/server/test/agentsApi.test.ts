@@ -301,50 +301,8 @@ describe('PATCH /api/agents/:id', () => {
     await app.close();
   });
 
-  it('rejects runtime changes when the bound machine does not support the target runtime', async () => {
+  it('allows updating machineId and runtime together for inactive agents', async () => {
     const app = await buildApp();
-    const store = getStore();
-    await store.upsertMachine({
-      id: 'machine-1',
-      hostname: 'host',
-      os: 'darwin',
-      daemonVersion: '1.5.1',
-      runtimes: ['claude'],
-      runtimeVersions: { claude: '1.0.0' },
-      status: 'online',
-      connectedAt: new Date().toISOString(),
-    });
-    await store.createAgent({
-      id: 'agent-bound',
-      name: 'bound',
-      runtime: 'claude',
-      machineId: 'machine-1',
-      status: 'inactive',
-      createdAt: new Date().toISOString(),
-    });
-    const res = await app.inject({
-      method: 'PATCH',
-      url: '/api/agents/agent-bound',
-      payload: { runtime: 'codex' },
-    });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toContain('Machine does not support runtime codex');
-    await app.close();
-  });
-
-  it('validates patched machine and runtime together', async () => {
-    const app = await buildApp();
-    const store = getStore();
-    await store.upsertMachine({
-      id: 'machine-codex',
-      hostname: 'host',
-      os: 'darwin',
-      daemonVersion: '1.5.1',
-      runtimes: ['codex'],
-      runtimeVersions: { codex: '1.0.0' },
-      status: 'online',
-      connectedAt: new Date().toISOString(),
-    });
     const created = await app.inject({ method: 'POST', url: '/api/agents', payload: { name: 'a', runtime: 'claude' } });
     const res = await app.inject({
       method: 'PATCH',

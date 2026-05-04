@@ -28,7 +28,7 @@ export async function notifyTaskAssignee(task: Task): Promise<void> {
   }
 
   if (!target.autoStart) return;
-  const machineId = await paseoRuntimeService.resolveStartMachineId(target);
+  const machineId = paseoRuntimeService.resolveStartMachineId(target);
   if (!machineId) return;
 
   const sent = await paseoRuntimeService.startAgent({

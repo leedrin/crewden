@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { getStore, resetStore } from '../src/db.js';
-import { daemonRegistry } from '../src/daemonRegistry.js';
+import { paseoRuntimeService } from '../src/runtime/paseo-runtime-service.js';
 
 beforeEach(async () => {
   await resetStore();
+  vi.restoreAllMocks();
+  vi.spyOn(paseoRuntimeService, 'deliverMessage').mockResolvedValue(true);
+  vi.spyOn(paseoRuntimeService, 'startAgent').mockResolvedValue(true);
+  vi.spyOn(paseoRuntimeService, 'stopAgent').mockResolvedValue(true);
+  vi.spyOn(paseoRuntimeService, 'resolveStartMachineId').mockImplementation((agent) => agent.machineId ?? 'paseo-runtime');
 });
 
 describe('task API', () => {
@@ -192,14 +197,13 @@ describe('task API', () => {
   it('does not deliver task while dependency is open', async () => {
     const app = await buildApp();
     const store = getStore();
-    const fakeSocket = { readyState: 1, send: vi.fn() };
-    daemonRegistry.register('machine-1', fakeSocket as any);
+    const deliverSpy = vi.spyOn(paseoRuntimeService, 'deliverMessage');
     await store.createAgent({
       id: 'agent-1',
       name: 'worker',
       runtime: 'claude',
       status: 'idle',
-      machineId: 'machine-1',
+      machineId: 'paseo-runtime',
       createdAt: new Date().toISOString(),
     });
     const blocker = await app.inject({
@@ -221,23 +225,21 @@ describe('task API', () => {
     });
 
     expect(dependent.statusCode).toBe(201);
-    expect(fakeSocket.send).not.toHaveBeenCalled();
-    daemonRegistry.unregister('machine-1');
+    expect(deliverSpy).not.toHaveBeenCalled();
     await app.close();
   });
 
   it('sends claimable tasks in inbox summary with assigned task delivery', async () => {
     const app = await buildApp();
     const store = getStore();
-    const fakeSocket = { readyState: 1, send: vi.fn() };
-    daemonRegistry.register('machine-1', fakeSocket as any);
+    const deliverSpy = vi.spyOn(paseoRuntimeService, 'deliverMessage');
     await store.createAgent({
       id: 'agent-1',
       name: 'engineer',
       description: 'implements backend fixes',
       runtime: 'claude',
       status: 'idle',
-      machineId: 'machine-1',
+      machineId: 'paseo-runtime',
       createdAt: new Date().toISOString(),
     });
     await app.inject({
@@ -245,7 +247,6 @@ describe('task API', () => {
       url: '/api/tasks',
       payload: { channelId: 'general', title: 'backend pull discovery cleanup', creatorName: 'user' },
     });
-    fakeSocket.send.mockClear();
 
     const assigned = await app.inject({
       method: 'POST',
@@ -254,29 +255,27 @@ describe('task API', () => {
     });
 
     expect(assigned.statusCode).toBe(201);
-    expect(fakeSocket.send).toHaveBeenCalledTimes(1);
-    const sent = JSON.parse(fakeSocket.send.mock.calls[0][0]);
-    expect(sent).toMatchObject({ type: 'agent:deliver', agentId: 'agent-1' });
-    expect(sent.inboxSummary).toContain('Open tasks assigned to you:');
-    expect(sent.inboxSummary).toContain('assigned delivery task');
-    expect(sent.inboxSummary).toContain('Claimable unassigned tasks matching your role/capability:');
-    expect(sent.inboxSummary).toContain('backend pull discovery cleanup');
-
-    daemonRegistry.unregister('machine-1');
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    const call = deliverSpy.mock.calls[0][0];
+    expect(call.target.id).toBe('agent-1');
+    expect(call.message.channelId).toContain('task:');
+    expect(call.inboxSummary).toContain('Open tasks assigned to you:');
+    expect(call.inboxSummary).toContain('assigned delivery task');
+    expect(call.inboxSummary).toContain('Claimable unassigned tasks matching your role/capability:');
+    expect(call.inboxSummary).toContain('backend pull discovery cleanup');
     await app.close();
   });
 
   it('unblocks dependency when blocker is done', async () => {
     const app = await buildApp();
     const store = getStore();
-    const fakeSocket = { readyState: 1, send: vi.fn() };
-    daemonRegistry.register('machine-1', fakeSocket as any);
+    const deliverSpy = vi.spyOn(paseoRuntimeService, 'deliverMessage');
     await store.createAgent({
       id: 'agent-1',
       name: 'worker',
       runtime: 'claude',
       status: 'idle',
-      machineId: 'machine-1',
+      machineId: 'paseo-runtime',
       createdAt: new Date().toISOString(),
     });
     const blocker = await app.inject({
@@ -295,7 +294,7 @@ describe('task API', () => {
         context: { blockedByTaskIds: [blocker.json().id] },
       },
     });
-    expect(fakeSocket.send).not.toHaveBeenCalled();
+    expect(deliverSpy).not.toHaveBeenCalled();
 
     const started = await app.inject({
       method: 'PATCH',
@@ -314,14 +313,10 @@ describe('task API', () => {
     });
 
     expect(done.statusCode).toBe(200);
-    expect(fakeSocket.send).toHaveBeenCalledTimes(1);
-    const sent = JSON.parse(fakeSocket.send.mock.calls[0][0]);
-    expect(sent).toMatchObject({
-      type: 'agent:deliver',
-      agentId: 'agent-1',
-      message: { channelId: `task:${dependent.json().id}` },
-    });
-    daemonRegistry.unregister('machine-1');
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    const call = deliverSpy.mock.calls[0][0];
+    expect(call.target.id).toBe('agent-1');
+    expect(call.message.channelId).toBe(`task:${dependent.json().id}`);
     await app.close();
   });
 

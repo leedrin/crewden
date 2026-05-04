@@ -1,34 +1,13 @@
 import { nanoid } from 'nanoid';
-import { resolveStartMachineId, toRuntimeConfig } from '@crewden/hub-core';
 import type { Agent, AgentDelivery, AgentRuntimeConfig, WorkspaceEntry, WorkspaceError } from '@crewden/shared';
-import { getStore } from '../db.js';
-import { toAgentRuntimeConfig } from '../runtimeConfig.js';
-import { LegacyLocalRuntimeAdapter } from '../agent-runtime-bridge/legacy-local-runtime-adapter.js';
+import { toAgentRuntimeConfig } from './agent-runtime-config.js';
 import { PaseoDaemonMode } from '../agent-runtime-bridge/paseo-daemon-mode.js';
-import type { AgentRuntimeBridge, RuntimeMode, RuntimeStatusSnapshot } from '../agent-runtime-bridge/types.js';
-
-const LEGACY_MODE_ALIASES = new Set(['legacy-local', 'local-daemon', 'daemon']);
-
-function parseConfiguredMode(): RuntimeMode {
-  const explicit = process.env.CREWDEN_RUNTIME_MODE?.trim().toLowerCase();
-  if (explicit === 'legacy-local') return 'legacy-local';
-  if (explicit === 'paseo-daemon') return 'paseo-daemon';
-
-  const legacyCompat = process.env.CREWDEN_DAEMON_MODE?.trim().toLowerCase();
-  if (legacyCompat && LEGACY_MODE_ALIASES.has(legacyCompat)) return 'legacy-local';
-  if (legacyCompat === 'paseo' || legacyCompat === 'paseo-daemon') return 'paseo-daemon';
-
-  return 'paseo-daemon';
-}
+import type { RuntimeStatusSnapshot } from '../agent-runtime-bridge/types.js';
 
 export class PaseoRuntimeService {
-  private readonly configuredMode: RuntimeMode;
-  private readonly legacyBridge: AgentRuntimeBridge;
   private readonly paseoBridge: PaseoDaemonMode;
 
   constructor() {
-    this.configuredMode = parseConfiguredMode();
-    this.legacyBridge = new LegacyLocalRuntimeAdapter();
     this.paseoBridge = new PaseoDaemonMode({
       daemonUrl: process.env.PASEO_DAEMON_URL,
       apiKey: process.env.PASEO_DAEMON_API_KEY,
@@ -39,33 +18,23 @@ export class PaseoRuntimeService {
   }
 
   async connect(): Promise<void> {
-    const bridge = this.resolveBridge();
-    await bridge.connect();
+    await this.paseoBridge.connect();
   }
 
   getStatus(): RuntimeStatusSnapshot {
-    const fallbackReason = this.configuredMode === 'paseo-daemon' && !this.paseoBridge.isConfigured()
-      ? 'PASEO_DAEMON_URL is missing; fallback to legacy-local.'
+    const fallbackReason = !this.paseoBridge.isConfigured()
+      ? 'PASEO_DAEMON_URL is missing.'
       : undefined;
-    const effectiveBridge = this.resolveBridge();
     return {
-      configuredMode: this.configuredMode,
-      effectiveMode: effectiveBridge.mode,
-      connected: effectiveBridge.connected,
+      configuredMode: 'paseo-daemon',
+      effectiveMode: 'paseo-daemon',
+      connected: this.paseoBridge.connected,
       fallbackReason,
     };
   }
 
-  async resolveStartMachineId(agent: Agent): Promise<string | undefined> {
-    const bridge = this.resolveBridge();
-    if (bridge.mode === 'paseo-daemon') {
-      return agent.machineId ?? 'paseo-runtime';
-    }
-    return resolveStartMachineId({
-      agent,
-      machines: await getStore().listMachines(),
-      connectedMachineIds: new Set(bridge.listConnectedMachineIds()),
-    });
+  resolveStartMachineId(agent: Agent): string {
+    return agent.machineId ?? 'paseo-runtime';
   }
 
   async startAgent(params: {
@@ -76,20 +45,27 @@ export class PaseoRuntimeService {
     wakeMessage?: AgentDelivery;
     inboxSummary?: string;
   }): Promise<boolean> {
-    const bridge = this.resolveBridge();
     const config = params.config ?? await toAgentRuntimeConfig(params.agent);
-    return bridge.startAgent({
-      agent: params.agent,
-      machineId: params.machineId,
-      launchId: params.launchId ?? nanoid(),
-      config,
-      wakeMessage: params.wakeMessage,
-      inboxSummary: params.inboxSummary,
-    });
+    try {
+      return await this.paseoBridge.startAgent({
+        agent: params.agent,
+        machineId: params.machineId,
+        launchId: params.launchId ?? nanoid(),
+        config,
+        wakeMessage: params.wakeMessage,
+        inboxSummary: params.inboxSummary,
+      });
+    } catch {
+      return false;
+    }
   }
 
   async stopAgent(agent: Agent): Promise<boolean> {
-    return this.resolveBridge().stopAgent(agent);
+    try {
+      return await this.paseoBridge.stopAgent(agent);
+    } catch {
+      return false;
+    }
   }
 
   async deliverMessage(params: {
@@ -99,36 +75,29 @@ export class PaseoRuntimeService {
     message: AgentDelivery;
     inboxSummary?: string;
   }): Promise<boolean> {
-    const bridge = this.resolveBridge();
-    const config = bridge.mode === 'legacy-local' ? toRuntimeConfig(params.target) : undefined;
-    return bridge.deliverMessage({
-      agent: params.target,
-      seq: params.seq,
-      channelId: params.channelId,
-      message: params.message,
-      config,
-      inboxSummary: params.inboxSummary,
-    });
+    try {
+      return await this.paseoBridge.deliverMessage({
+        agent: params.target,
+        seq: params.seq,
+        channelId: params.channelId,
+        message: params.message,
+        inboxSummary: params.inboxSummary,
+      });
+    } catch {
+      return false;
+    }
   }
 
   async readWorkspace(agent: Agent, relPath: string): Promise<WorkspaceEntry | WorkspaceError> {
-    const bridge = this.resolveBridge();
-    const machineId = await this.resolveStartMachineId(agent);
-    if (!machineId) {
-      return { type: 'error', status: 503, error: 'No connected machine available for agent workspace' };
+    if (!this.paseoBridge.isConfigured()) {
+      return { type: 'error', status: 503, error: 'Paseo daemon is not configured' };
     }
-    return bridge.readWorkspace({
+    return this.paseoBridge.readWorkspace({
       agent,
-      machineId,
+      machineId: this.resolveStartMachineId(agent),
       requestId: nanoid(),
       relPath,
     });
-  }
-
-  private resolveBridge(): AgentRuntimeBridge {
-    if (this.configuredMode === 'legacy-local') return this.legacyBridge;
-    if (this.paseoBridge.isConfigured()) return this.paseoBridge;
-    return this.legacyBridge;
   }
 }
 
