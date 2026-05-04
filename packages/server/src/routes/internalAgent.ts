@@ -36,15 +36,15 @@ import {
   type TaskProgressEventType,
   type TaskReview,
 } from '@crewden/shared';
-import { buildClarifyingQuestions, inferGoalRiskLevel, recommendAgentsForGoal, toRuntimeConfig } from '@crewden/hub-core';
+import { buildClarifyingQuestions, inferGoalRiskLevel, recommendAgentsForGoal } from '@crewden/hub-core';
 import { getStore } from '../db.js';
 import { eventBus } from '../events.js';
-import { daemonRegistry } from '../daemonRegistry.js';
 import { delegateAgent } from '../delegation.js';
 import { buildOpenTaskSummary, notifyTaskAssignee } from '../taskDelivery.js';
 import { matchesAgentCapability } from '../taskMatching.js';
 import { archiveGoal } from './knowledge.js';
 import { validateAgentRuntimePatch } from '../agentRuntimePatch.js';
+import { deliverToAgent } from '../runtime/delivery.js';
 
 export async function internalAgentRoutes(app: FastifyInstance) {
   app.addHook('preHandler', async (req, reply) => {
@@ -991,13 +991,10 @@ async function createTaskClaimAcknowledgement(task: Task, agent: Agent): Promise
 }
 
 async function deliverDirectMessage(target: Agent, dm: DirectMessage): Promise<void> {
-  if (!target.machineId || target.status === 'inactive') return;
-  daemonRegistry.send(target.machineId, {
-    type: 'agent:deliver',
-    agentId: target.id,
+  deliverToAgent({
+    target,
     seq: Date.now(),
     channelId: `dm:${dm.fromAgentId}:${dm.toAgentId}`,
-    config: toRuntimeConfig(target),
     message: {
       id: dm.id,
       channelId: `dm:${dm.fromAgentId}:${dm.toAgentId}`,
