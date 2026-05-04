@@ -776,6 +776,7 @@ vi.mock('../src/api.js', () => ({
   sendMessage: vi.fn(),
   getAgents: vi.fn(async () => []),
   getMachines: vi.fn(async () => []),
+  getRuntimeStatus: vi.fn(async () => ({ mode: 'legacy-local', configuredMode: 'legacy-local', connected: true })),
   getAgentActivities: vi.fn(async () => []),
   patchAgent: vi.fn(),
   deleteAgent: vi.fn(),

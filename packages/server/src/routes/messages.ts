@@ -1,11 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
 import { getStore } from '../db.js';
-import { daemonRegistry } from '../daemonRegistry.js';
 import { eventBus } from '../events.js';
 import { CreateMessageRequestSchema, type Agent, type Mention } from '@crewden/shared';
-import { toAgentDelivery, toRuntimeConfig } from '@crewden/hub-core';
+import { toAgentDelivery } from '@crewden/hub-core';
 import { buildOpenTaskSummary } from '../taskDelivery.js';
+import { paseoRuntimeService } from '../runtime/paseo-runtime-service.js';
 
 export async function messageRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>('/api/channels/:id/messages', async (req, reply) => {
@@ -52,14 +52,12 @@ export async function messageRoutes(app: FastifyInstance) {
 
     for (const targetAgentId of targetAgentIds) {
       const agent = await store.getAgent(targetAgentId);
-      if (agent?.machineId && agent.status !== 'inactive') {
-        daemonRegistry.send(agent.machineId, {
-          type: 'agent:deliver',
-          agentId: agent.id,
+      if (agent && agent.status !== 'inactive') {
+        await paseoRuntimeService.deliverMessage({
+          target: agent,
           seq: Date.now(),
           message: toAgentDelivery(message, channel),
           channelId: channel.id,
-          config: toRuntimeConfig(agent),
           inboxSummary: await buildOpenTaskSummary(agent),
         });
       }

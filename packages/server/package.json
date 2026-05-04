@@ -5,8 +5,8 @@
   "main": "./dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "pnpm --filter @crewden/hub-core build && tsc",
-    "typecheck": "pnpm --filter @crewden/hub-core build && tsc --noEmit",
+    "build": "pnpm --filter @crewden/hub-core build && pnpm --filter @crewden/paseo-client build && tsc",
+    "typecheck": "pnpm --filter @crewden/hub-core build && pnpm --filter @crewden/paseo-client build && tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -14,6 +14,7 @@
     "@fastify/websocket": "^8.3.1",
     "@libsql/client": "^0.17.3",
     "@crewden/hub-core": "workspace:*",
+    "@crewden/paseo-client": "workspace:*",
     "@crewden/shared": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "fastify": "^4.27.0",

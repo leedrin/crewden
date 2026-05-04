@@ -11,8 +11,8 @@ import { GoalAlignmentPanel } from './components/GoalAlignmentPanel.js';
 import { KnowledgePanel } from './components/KnowledgePanel.js';
 import { MobileTopBar } from './components/MobileTopBar.js';
 import { LoginView } from './components/LoginView.js';
-import type { Channel, Message, MessageThread, Agent, Machine, AgentActivity, VersionInfo, Task, Reminder, SearchMessageResult, GoalBrief, GoalAlignment } from './api.js';
-import { AuthError, WEB_COMMIT_SHA, WEB_VERSION, buildWsUrl, getChannels, getMessages, getMessageThread, sendMessage, getAgents, getMachines, getAgentActivities, getHubVersion, getTasks, messageToTask, startGoalAlignment, getAgentReminders, createChannel, deleteChannel, searchMessages, setAuthFailureHandler, verifyAuthToken } from './api.js';
+import type { Channel, Message, MessageThread, Agent, Machine, AgentActivity, VersionInfo, Task, Reminder, SearchMessageResult, GoalBrief, GoalAlignment, RuntimeStatus } from './api.js';
+import { AuthError, WEB_COMMIT_SHA, WEB_VERSION, buildWsUrl, getChannels, getMessages, getMessageThread, sendMessage, getAgents, getMachines, getAgentActivities, getHubVersion, getTasks, messageToTask, startGoalAlignment, getAgentReminders, createChannel, deleteChannel, searchMessages, setAuthFailureHandler, verifyAuthToken, getRuntimeStatus } from './api.js';
 import { clearStoredAuthToken, getEffectiveAuthToken, markSignedOut, setStoredAuthToken } from './auth.js';
 import { notifyBrowser, requestPermission } from './notifications.js';
 
@@ -38,6 +38,7 @@ export function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | undefined>();
   const [hubVersion, setHubVersion] = useState<VersionInfo | undefined>();
   const [activitiesByAgent, setActivitiesByAgent] = useState<Record<string, AgentActivity[]>>({});
   const [remindersByAgent, setRemindersByAgent] = useState<Record<string, Reminder[]>>({});
@@ -63,6 +64,7 @@ export function App() {
     setAgents([]);
     setMachines([]);
     setTasks([]);
+    setRuntimeStatus(undefined);
     setHubVersion(undefined);
     setActivitiesByAgent({});
     setRemindersByAgent({});
@@ -155,6 +157,11 @@ export function App() {
     setTasks(data);
   }, []);
 
+  const loadRuntimeStatus = useCallback(async () => {
+    const data = await getRuntimeStatus();
+    setRuntimeStatus(data);
+  }, []);
+
   const upsertMessage = useCallback((message: Message) => {
     setMessagesByChannel((prev) => {
       const current = prev[message.channelId] ?? [];
@@ -184,9 +191,10 @@ export function App() {
     loadAgents();
     loadMachines();
     loadTasks();
+    loadRuntimeStatus();
     getHubVersion().then(setHubVersion).catch(() => undefined);
     requestPermission().catch(() => undefined);
-  }, [isAuthenticated, loadAgents, loadChannels, loadMachines, loadTasks]);
+  }, [isAuthenticated, loadAgents, loadChannels, loadMachines, loadRuntimeStatus, loadTasks]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -246,6 +254,7 @@ export function App() {
       loadChannels();
       loadAgents();
       loadMachines();
+      loadRuntimeStatus();
       loadTasks();
       loadMessages(selectedChannelRef.current);
     };
@@ -384,7 +393,7 @@ export function App() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [handleAuthExpired, isAuthenticated, loadAgents, loadChannels, loadMachines, loadMessages, loadTasks, updateThreadRoot, upsertMessage]);
+  }, [handleAuthExpired, isAuthenticated, loadAgents, loadChannels, loadMachines, loadMessages, loadRuntimeStatus, loadTasks, updateThreadRoot, upsertMessage]);
 
   const handleSend = async (content: string, agentId?: string) => {
     const channelId = selectedChannel;
@@ -648,7 +657,7 @@ export function App() {
           onClose={() => setSelectedAgentId(undefined)}
         />
       ) : rightPanel === 'agents' ? (
-        <AgentPanel agents={agents} machines={machines} onAgentsChange={loadAgents} onClose={() => setRightPanel(undefined)} />
+        <AgentPanel agents={agents} machines={machines} runtimeStatus={runtimeStatus} onAgentsChange={loadAgents} onClose={() => setRightPanel(undefined)} />
       ) : (
         <button
           className="right-rail-trigger"

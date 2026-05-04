@@ -31,6 +31,20 @@ describe('GET /api/version', () => {
   });
 });
 
+describe('GET /api/runtime/status', () => {
+  it('returns runtime mode diagnostics', async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/api/runtime/status' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      mode: expect.any(String),
+      configuredMode: expect.any(String),
+      connected: expect.any(Boolean),
+    });
+    await app.close();
+  });
+});
+
 describe('POST /api/channels/:id/messages', () => {
   it('creates a message', async () => {
     const app = await buildApp();

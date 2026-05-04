@@ -1,11 +1,9 @@
 import type { Agent, Task } from '@crewden/shared';
-import { resolveStartMachineId, toRuntimeConfig } from '@crewden/hub-core';
 import { nanoid } from 'nanoid';
-import { daemonRegistry } from './daemonRegistry.js';
 import { getStore } from './db.js';
 import { eventBus } from './events.js';
-import { toAgentRuntimeConfig } from './runtimeConfig.js';
 import { matchesAgentCapability } from './taskMatching.js';
+import { paseoRuntimeService } from './runtime/paseo-runtime-service.js';
 
 const ACTIVE_STATUSES = new Set(['starting', 'running', 'working', 'idle']);
 
@@ -18,13 +16,11 @@ export async function notifyTaskAssignee(task: Task): Promise<void> {
 
   const message = toTaskDelivery(task);
   const inboxSummary = await buildOpenTaskSummary(target);
-  if (ACTIVE_STATUSES.has(target.status) && target.machineId) {
-    daemonRegistry.send(target.machineId, {
-      type: 'agent:deliver',
-      agentId: target.id,
+  if (ACTIVE_STATUSES.has(target.status)) {
+    await paseoRuntimeService.deliverMessage({
+      target,
       seq: Date.now(),
       channelId: message.channelId,
-      config: toRuntimeConfig(target),
       message,
       inboxSummary,
     });
@@ -32,17 +28,12 @@ export async function notifyTaskAssignee(task: Task): Promise<void> {
   }
 
   if (!target.autoStart) return;
-  const machineId = resolveStartMachineId({
-    agent: target,
-    machines: await store.listMachines(),
-    connectedMachineIds: new Set(daemonRegistry.listConnectedMachineIds()),
-  });
+  const machineId = await paseoRuntimeService.resolveStartMachineId(target);
   if (!machineId) return;
 
-  const sent = daemonRegistry.send(machineId, {
-    type: 'agent:start',
-    agentId: target.id,
-    config: await toAgentRuntimeConfig(target),
+  const sent = await paseoRuntimeService.startAgent({
+    agent: target,
+    machineId,
     launchId: nanoid(),
     wakeMessage: message,
     inboxSummary,

@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import type { Agent, Machine } from '../api.js';
+import type { Agent, Machine, RuntimeStatus } from '../api.js';
 import { createAgent, deleteAgent, startAgent, stopAgent } from '../api.js';
 
 type Props = {
   agents: Agent[];
   machines: Machine[];
+  runtimeStatus?: RuntimeStatus;
   onAgentsChange: () => void;
   onClose?: () => void;
 };
@@ -23,7 +24,7 @@ const inputStyle: React.CSSProperties = {
   outline: 'none',
 };
 
-export function AgentPanel({ agents, machines, onAgentsChange, onClose }: Props) {
+export function AgentPanel({ agents, machines, runtimeStatus, onAgentsChange, onClose }: Props) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     name: '',
@@ -121,6 +122,24 @@ export function AgentPanel({ agents, machines, onAgentsChange, onClose }: Props)
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
+        {runtimeStatus ? (
+          <div style={{
+            border: '2px solid #000',
+            background: '#fff',
+            padding: 10,
+            marginBottom: 10,
+            fontSize: 11,
+            display: 'grid',
+            gap: 4,
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 700 }}>RUNTIME DIAGNOSTICS</div>
+            <div>EFFECTIVE: <strong>{runtimeStatus.mode.toUpperCase()}</strong></div>
+            <div>CONFIGURED: <strong>{runtimeStatus.configuredMode.toUpperCase()}</strong></div>
+            <div>CONNECTED: <strong>{runtimeStatus.connected ? 'YES' : 'NO'}</strong></div>
+            {runtimeStatus.fallbackReason ? <div style={{ color: '#b00020' }}>{runtimeStatus.fallbackReason}</div> : null}
+          </div>
+        ) : null}
+
         {/* Create form */}
         {showForm && (
           <div style={{

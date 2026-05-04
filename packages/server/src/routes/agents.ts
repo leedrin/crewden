@@ -1,14 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
 import { getStore } from '../db.js';
-import { daemonRegistry } from '../daemonRegistry.js';
 import { eventBus } from '../events.js';
 import { CreateAgentDelegationRequestSchema, CreateAgentRequestSchema, CreateDirectMessageRequestSchema, CreateReminderRequestSchema, PatchAgentRequestSchema, PatchReminderRequestSchema, type Agent, type DirectMessage } from '@crewden/shared';
-import { resolveStartMachineId, toRuntimeConfig } from '@crewden/hub-core';
 import { delegateAgent } from '../delegation.js';
-import { toAgentRuntimeConfig } from '../runtimeConfig.js';
 import { buildOpenTaskSummary } from '../taskDelivery.js';
 import { validateAgentRuntimePatch } from '../agentRuntimePatch.js';
+import { paseoRuntimeService } from '../runtime/paseo-runtime-service.js';
 
 export async function agentRoutes(app: FastifyInstance) {
   app.get('/api/agents', async () => {
@@ -64,15 +62,7 @@ export async function agentRoutes(app: FastifyInstance) {
     if (isUnsafeWorkspacePath(relPath)) {
       return reply.status(403).send({ error: 'Path traversal is not allowed' });
     }
-
-    const machineId = resolveStartMachineId({
-      agent,
-      machines: await store.listMachines(),
-      connectedMachineIds: new Set(daemonRegistry.listConnectedMachineIds()),
-    });
-    if (!machineId) return reply.status(503).send({ error: 'No connected machine available for agent workspace' });
-
-    const result = await daemonRegistry.readWorkspace(machineId, agent.id, nanoid(), relPath);
+    const result = await paseoRuntimeService.readWorkspace(agent, relPath);
     if (result.type === 'error') {
       return reply.status(result.status ?? 500).send({ error: result.error });
     }
@@ -138,8 +128,8 @@ export async function agentRoutes(app: FastifyInstance) {
       return reply.status(409).send({ error: 'Cannot delete agent while it is working. Stop the agent first.' });
     }
 
-    if (agent.machineId && agent.status !== 'inactive') {
-      daemonRegistry.send(agent.machineId, { type: 'agent:stop', agentId: agent.id });
+    if (agent.status !== 'inactive') {
+      await paseoRuntimeService.stopAgent(agent);
     }
     await store.deleteAgent(agent.id);
     eventBus.emit({ type: 'agent:deleted', agentId: agent.id });
@@ -208,19 +198,14 @@ export async function agentRoutes(app: FastifyInstance) {
     const store = getStore();
     const agent = await store.getAgent(req.params.id);
     if (!agent) return reply.status(404).send({ error: 'Agent not found' });
-    const machineId = resolveStartMachineId({
-      agent,
-      machines: await store.listMachines(),
-      connectedMachineIds: new Set(daemonRegistry.listConnectedMachineIds()),
-    });
+    const machineId = await paseoRuntimeService.resolveStartMachineId(agent);
     if (!machineId) return reply.status(503).send({ error: 'No connected machine available for agent runtime' });
 
     const launchId = nanoid();
     const inboxSummary = await buildOpenTaskSummary(agent);
-    const sent = daemonRegistry.send(machineId, {
-      type: 'agent:start',
-      agentId: agent.id,
-      config: await toAgentRuntimeConfig(agent),
+    const sent = await paseoRuntimeService.startAgent({
+      agent,
+      machineId,
       launchId,
       inboxSummary,
     });
@@ -236,9 +221,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const store = getStore();
     const agent = await store.getAgent(req.params.id);
     if (!agent) return reply.status(404).send({ error: 'Agent not found' });
-    if (!agent.machineId) return reply.status(400).send({ error: 'Agent has no machine assigned' });
-
-    daemonRegistry.send(agent.machineId, { type: 'agent:stop', agentId: agent.id });
+    await paseoRuntimeService.stopAgent(agent);
     const updated = (await store.updateAgent(agent.id, { status: 'inactive', autoStart: false }))!;
     eventBus.emit({ type: 'agent:update', agent: updated });
     return updated;
@@ -250,13 +233,11 @@ function isUnsafeWorkspacePath(value: string): boolean {
 }
 
 async function deliverDirectMessage(target: Agent, dm: DirectMessage): Promise<void> {
-  if (!target.machineId || target.status === 'inactive') return;
-  daemonRegistry.send(target.machineId, {
-    type: 'agent:deliver',
-    agentId: target.id,
+  if (target.status === 'inactive') return;
+  await paseoRuntimeService.deliverMessage({
+    target,
     seq: Date.now(),
     channelId: `dm:${dm.fromAgentId}:${dm.toAgentId}`,
-    config: toRuntimeConfig(target),
     message: {
       id: dm.id,
       channelId: `dm:${dm.fromAgentId}:${dm.toAgentId}`,

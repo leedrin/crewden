@@ -1,11 +1,9 @@
 import { nanoid } from 'nanoid';
 import type { Agent, AgentDelegation, DirectMessage } from '@crewden/shared';
-import { resolveStartMachineId, toRuntimeConfig } from '@crewden/hub-core';
 import { getStore } from './db.js';
-import { daemonRegistry } from './daemonRegistry.js';
 import { eventBus } from './events.js';
-import { toAgentRuntimeConfig } from './runtimeConfig.js';
 import { buildOpenTaskSummary } from './taskDelivery.js';
+import { paseoRuntimeService } from './runtime/paseo-runtime-service.js';
 
 const ACTIVE_STATUSES = new Set(['starting', 'running', 'working', 'idle']);
 
@@ -68,7 +66,7 @@ export async function delegateAgent(input: {
   });
   eventBus.emit({ type: 'dm:new', dm });
 
-  if (ACTIVE_STATUSES.has(target.status) && target.machineId) {
+  if (ACTIVE_STATUSES.has(target.status)) {
     const sent = await deliverDelegation(target, dm);
     delegation = await updateDelegation(delegation.id, sent ? 'delivered' : 'failed', sent ? undefined : 'Machine not connected');
     return delegation;
@@ -79,20 +77,15 @@ export async function delegateAgent(input: {
     return delegation;
   }
 
-  const machineId = resolveStartMachineId({
-    agent: target,
-    machines: await store.listMachines(),
-    connectedMachineIds: new Set(daemonRegistry.listConnectedMachineIds()),
-  });
+  const machineId = await paseoRuntimeService.resolveStartMachineId(target);
   if (!machineId) {
     delegation = await updateDelegation(delegation.id, 'failed', 'No connected machine available for agent runtime');
     return delegation;
   }
 
-  const sent = daemonRegistry.send(machineId, {
-    type: 'agent:start',
-    agentId: target.id,
-    config: await toAgentRuntimeConfig(target),
+  const sent = await paseoRuntimeService.startAgent({
+    agent: target,
+    machineId,
     launchId: nanoid(),
     wakeMessage: toDelegationDelivery(dm),
     inboxSummary: await buildOpenTaskSummary(target),
@@ -109,13 +102,10 @@ export async function delegateAgent(input: {
 }
 
 async function deliverDelegation(target: Agent, dm: DirectMessage): Promise<boolean> {
-  if (!target.machineId) return false;
-  return daemonRegistry.send(target.machineId, {
-    type: 'agent:deliver',
-    agentId: target.id,
+  return paseoRuntimeService.deliverMessage({
+    target,
     seq: Date.now(),
     channelId: `dm:${dm.fromAgentId}:${dm.toAgentId}`,
-    config: toRuntimeConfig(target),
     message: toDelegationDelivery(dm),
     inboxSummary: await buildOpenTaskSummary(target),
   });

@@ -20,6 +20,12 @@ export type WorkspaceEntry =
   | { type: 'file'; path: string; content: string; truncated?: boolean; binary?: boolean };
 export type AgentDelegation = { id: string; fromAgentId: string; toAgentId: string; content: string; status: 'queued' | 'delivered' | 'started' | 'failed'; error?: string; createdAt: string };
 export type Machine = { id: string; hostname: string; os: string; runtimes: string[]; status: string; connectedAt: string };
+export type RuntimeStatus = {
+  mode: 'paseo-daemon' | 'legacy-local';
+  configuredMode: 'paseo-daemon' | 'legacy-local';
+  connected: boolean;
+  fallbackReason?: string;
+};
 export type VersionInfo = { component: string; version: string; commit?: string; build?: string };
 export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'blocked' | 'cancelled';
 export type GoalBriefStatus = 'draft' | 'confirmed' | 'cancelled' | 'completed';
@@ -231,6 +237,12 @@ export async function stopAgent(agentId: string): Promise<Agent> {
 
 export async function getMachines(): Promise<Machine[]> {
   const r = await apiFetch(`${API_BASE}/api/machines`, { headers: authHeaders() });
+  return r.json();
+}
+
+export async function getRuntimeStatus(): Promise<RuntimeStatus> {
+  const r = await apiFetch(`${API_BASE}/api/runtime/status`, { headers: authHeaders() });
+  if (!r.ok) throw new Error('Failed to load runtime status');
   return r.json();
 }
 

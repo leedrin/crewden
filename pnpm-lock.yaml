@@ -129,6 +129,9 @@ importers:
       '@crewden/hub-core':
         specifier: workspace:*
         version: link:../hub-core
+      '@crewden/paseo-client':
+        specifier: workspace:*
+        version: link:../paseo-client
       '@crewden/shared':
         specifier: workspace:*
         version: link:../shared

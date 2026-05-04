@@ -10,6 +10,7 @@ import { taskRoutes } from './routes/tasks.js';
 import { goalRoutes } from './routes/goals.js';
 import { goalAlignmentRoutes } from './routes/goalAlignments.js';
 import { knowledgeRoutes } from './routes/knowledge.js';
+import { runtimeRoutes } from './routes/runtime.js';
 import { daemonSocketHandler } from './ws/daemonSocket.js';
 import { browserSocketHandler } from './ws/browserSocket.js';
 import { initDb, resetVolatileState } from './db.js';
@@ -53,6 +54,7 @@ export async function buildApp(opts: { logger?: boolean } = {}) {
   await app.register(goalRoutes);
   await app.register(goalAlignmentRoutes);
   await app.register(knowledgeRoutes);
+  await app.register(runtimeRoutes);
   await app.register(internalAgentRoutes);
   await app.register(daemonSocketHandler);
   await app.register(browserSocketHandler);

@@ -11,4 +11,5 @@ export type {
   CrewdenEvent,
   AgentMessageEvent,
   AgentActivityEvent,
+  PaseoStreamEvent,
 } from "./types.js";

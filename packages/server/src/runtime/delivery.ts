@@ -1,6 +1,5 @@
 import type { Agent, AgentDelivery } from '@crewden/shared';
-import { toRuntimeConfig } from '@crewden/hub-core';
-import { daemonRegistry } from '../daemonRegistry.js';
+import { paseoRuntimeService } from './paseo-runtime-service.js';
 
 export type DeliverToAgentParams = {
   target: Agent;
@@ -17,16 +16,13 @@ export type DeliverToAgentParams = {
  * This function exists so callers can stop depending on transport details
  * before switching to Paseo runtime in later phases.
  */
-export function deliverToAgent(params: DeliverToAgentParams): boolean {
+export async function deliverToAgent(params: DeliverToAgentParams): Promise<boolean> {
   const { target, seq, channelId, message, inboxSummary } = params;
-  if (!target.machineId || target.status === 'inactive') return false;
-
-  return daemonRegistry.send(target.machineId, {
-    type: 'agent:deliver',
-    agentId: target.id,
+  if (target.status === 'inactive') return false;
+  return paseoRuntimeService.deliverMessage({
+    target,
     seq,
     channelId,
-    config: toRuntimeConfig(target),
     message,
     inboxSummary,
   });

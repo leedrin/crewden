@@ -991,7 +991,7 @@ async function createTaskClaimAcknowledgement(task: Task, agent: Agent): Promise
 }
 
 async function deliverDirectMessage(target: Agent, dm: DirectMessage): Promise<void> {
-  deliverToAgent({
+  await deliverToAgent({
     target,
     seq: Date.now(),
     channelId: `dm:${dm.fromAgentId}:${dm.toAgentId}`,
