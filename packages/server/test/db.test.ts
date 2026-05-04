@@ -122,6 +122,24 @@ describe('agents', () => {
     expect((await store.findAgentByNameOrId('产品经理'))?.id).toBe('agent-1');
     expect((await store.resolveAgent('产品经理')).confidence).toBe('exact_display_name');
   });
+
+  it('stores and resolves runtimeInstanceId mapping', async () => {
+    await store.createAgent({
+      id: 'agent-1',
+      name: 'runtime-agent',
+      runtime: 'codex',
+      status: 'inactive',
+      createdAt: new Date().toISOString(),
+    });
+
+    await store.setAgentRuntimeInstanceId('agent-1', 'paseo-agent-123');
+    expect((await store.getAgent('agent-1'))?.runtimeInstanceId).toBe('paseo-agent-123');
+    expect((await store.getAgentByRuntimeInstanceId('paseo-agent-123'))?.id).toBe('agent-1');
+
+    await store.clearAgentRuntimeInstanceId('agent-1');
+    expect((await store.getAgent('agent-1'))?.runtimeInstanceId).toBeUndefined();
+    expect(await store.getAgentByRuntimeInstanceId('paseo-agent-123')).toBeUndefined();
+  });
 });
 
 describe('machines', () => {

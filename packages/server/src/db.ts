@@ -249,6 +249,7 @@ export async function initDb(): Promise<void> {
     await database.run(`ALTER TABLE agents ADD COLUMN env_vars TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE agents ADD COLUMN organization TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE agents ADD COLUMN runtime_instance_id TEXT`).catch(() => undefined);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_agents_runtime_instance_id ON agents(runtime_instance_id)`);
     await database.run(`
       CREATE TABLE IF NOT EXISTS machines (
         id TEXT PRIMARY KEY,
@@ -1065,6 +1066,16 @@ export class SqliteStore {
     return agent ? toAgent(agent) : undefined;
   }
 
+  async getAgentByRuntimeInstanceId(runtimeInstanceId: string): Promise<Agent | undefined> {
+    await initDb();
+    const [agent] = await getDb()
+      .select()
+      .from(agents)
+      .where(eq(agents.runtimeInstanceId, runtimeInstanceId))
+      .limit(1);
+    return agent ? toAgent(agent) : undefined;
+  }
+
   async findAgentByNameOrId(value: string): Promise<Agent | undefined> {
     await initDb();
     return resolveAgentReference(value, await this.listAgents()).match;
@@ -1141,6 +1152,14 @@ export class SqliteStore {
       })
       .where(eq(agents.id, id));
     return updated;
+  }
+
+  async setAgentRuntimeInstanceId(id: string, runtimeInstanceId: string): Promise<Agent | undefined> {
+    return this.updateAgent(id, { runtimeInstanceId });
+  }
+
+  async clearAgentRuntimeInstanceId(id: string): Promise<Agent | undefined> {
+    return this.updateAgent(id, { runtimeInstanceId: undefined });
   }
 
   async deleteAgent(id: string): Promise<Agent | undefined> {
