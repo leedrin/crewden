@@ -386,6 +386,7 @@ export type Agent = {
     availability?: 'available' | 'unavailable' | 'overloaded';
   };
   machineId?: string;
+  runtimeInstanceId?: string;
   status: AgentStatus;
   autoStart?: boolean;
   createdAt: string;

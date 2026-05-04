@@ -151,6 +151,7 @@ export const agents = sqliteTable('agents', {
   envVars: text('env_vars'),
   organization: text('organization'),
   machineId: text('machine_id'),
+  runtimeInstanceId: text('runtime_instance_id'),
   status: text('status').notNull(),
   autoStart: integer('auto_start', { mode: 'boolean' }).notNull().default(false),
   createdAt: text('created_at').notNull(),

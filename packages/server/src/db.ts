@@ -232,6 +232,7 @@ export async function initDb(): Promise<void> {
         env_vars TEXT,
         organization TEXT,
         machine_id TEXT,
+        runtime_instance_id TEXT,
         status TEXT NOT NULL,
         auto_start INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
@@ -247,6 +248,7 @@ export async function initDb(): Promise<void> {
     }
     await database.run(`ALTER TABLE agents ADD COLUMN env_vars TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE agents ADD COLUMN organization TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE agents ADD COLUMN runtime_instance_id TEXT`).catch(() => undefined);
     await database.run(`
       CREATE TABLE IF NOT EXISTS machines (
         id TEXT PRIMARY KEY,
@@ -293,6 +295,7 @@ function toAgent(row: typeof agents.$inferSelect): Agent {
     envVars: row.envVars ? JSON.parse(row.envVars) as Record<string, string> : undefined,
     organization: row.organization ? JSON.parse(row.organization) as Agent['organization'] : undefined,
     machineId: row.machineId ?? undefined,
+    runtimeInstanceId: row.runtimeInstanceId ?? undefined,
     status: row.status as AgentStatus,
     autoStart: row.autoStart,
     createdAt: row.createdAt,
@@ -1083,6 +1086,7 @@ export class SqliteStore {
       envVars: agent.envVars ? JSON.stringify(agent.envVars) : null,
       organization: agent.organization ? JSON.stringify(agent.organization) : null,
       machineId: agent.machineId ?? null,
+      runtimeInstanceId: agent.runtimeInstanceId ?? null,
       autoStart: agent.autoStart ?? false,
     });
     return agent;
@@ -1130,6 +1134,7 @@ export class SqliteStore {
         envVars: updated.envVars ? JSON.stringify(updated.envVars) : null,
         organization: updated.organization ? JSON.stringify(updated.organization) : null,
         machineId: updated.machineId ?? null,
+        runtimeInstanceId: updated.runtimeInstanceId ?? null,
         status: updated.status,
         autoStart: updated.autoStart ?? false,
         createdAt: updated.createdAt,
