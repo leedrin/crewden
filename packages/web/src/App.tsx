@@ -303,6 +303,7 @@ export function App() {
           );
         } else if (msg.type === 'agent:update' || msg.type === 'agent:updated') {
           setAgents((prev) => prev.map((a) => (a.id === msg.agent.id ? msg.agent : a)));
+          loadRuntimeStatus();
           const agentStatus: string = msg.agent.status;
           if (agentStatus === 'working' || agentStatus === 'idle') {
             const agentLabel: string = msg.agent.displayName ?? msg.agent.name ?? msg.agent.id;
@@ -323,6 +324,10 @@ export function App() {
             if (current.some((activity) => activity.id === msg.activity.id)) return prev;
             return { ...prev, [msg.agentId]: [msg.activity, ...current].slice(0, 200) };
           });
+          const detail: string = msg.activity.detail ?? '';
+          if (detail.startsWith('permission:requested') || detail.startsWith('permission:resolved') || detail.startsWith('attention:permission')) {
+            loadRuntimeStatus();
+          }
         } else if (msg.type === 'machine:update') {
           setMachines((prev) => {
             const exists = prev.find((m) => m.id === msg.machine.id);
@@ -394,6 +399,14 @@ export function App() {
       wsRef.current = null;
     };
   }, [handleAuthExpired, isAuthenticated, loadAgents, loadChannels, loadMachines, loadMessages, loadRuntimeStatus, loadTasks, updateThreadRoot, upsertMessage]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const timer = setInterval(() => {
+      loadRuntimeStatus().catch(() => undefined);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [isAuthenticated, loadRuntimeStatus]);
 
   const handleSend = async (content: string, agentId?: string) => {
     const channelId = selectedChannel;
@@ -657,7 +670,14 @@ export function App() {
           onClose={() => setSelectedAgentId(undefined)}
         />
       ) : rightPanel === 'agents' ? (
-        <AgentPanel agents={agents} machines={machines} runtimeStatus={runtimeStatus} onAgentsChange={loadAgents} onClose={() => setRightPanel(undefined)} />
+        <AgentPanel
+          agents={agents}
+          machines={machines}
+          runtimeStatus={runtimeStatus}
+          onAgentsChange={loadAgents}
+          onRuntimeStatusRefresh={loadRuntimeStatus}
+          onClose={() => setRightPanel(undefined)}
+        />
       ) : (
         <button
           className="right-rail-trigger"

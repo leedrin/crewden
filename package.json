@@ -5,6 +5,7 @@
   "scripts": {
     "start": "bash start.sh",
     "dev": "pnpm --parallel --filter @crewden/server --filter @crewden/web dev",
+    "dev:stable": "bash scripts/dev-stable.sh",
     "deploy:web:pages": "bash scripts/deploy-cloudflare-pages.sh",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",

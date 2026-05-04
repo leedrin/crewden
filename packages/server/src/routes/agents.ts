@@ -7,6 +7,8 @@ import { delegateAgent } from '../delegation.js';
 import { buildOpenTaskSummary } from '../taskDelivery.js';
 import { validateAgentPatch } from '../runtime/validate-agent-patch.js';
 import { paseoRuntimeService } from '../runtime/paseo-runtime-service.js';
+import { deliverWithRetry } from '../runtime/delivery-reliability.js';
+import { isRuntimeSupported, markUnsupportedRuntime, unsupportedRuntimeError } from '../runtime/runtime-support.js';
 
 export async function agentRoutes(app: FastifyInstance) {
   app.get('/api/agents', async () => {
@@ -75,6 +77,9 @@ export async function agentRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
     }
     const { name, displayName, description, runtime, model, systemPrompt, machineId, organization } = parsed.data;
+    if (!isRuntimeSupported(runtime)) {
+      return reply.status(422).send({ error: unsupportedRuntimeError(runtime) });
+    }
 
     const agent = await getStore().createAgent({
       id: nanoid(),
@@ -198,6 +203,10 @@ export async function agentRoutes(app: FastifyInstance) {
     const store = getStore();
     const agent = await store.getAgent(req.params.id);
     if (!agent) return reply.status(404).send({ error: 'Agent not found' });
+    if (!isRuntimeSupported(agent.runtime)) {
+      await markUnsupportedRuntime(agent, 'start-agent');
+      return reply.status(422).send({ error: unsupportedRuntimeError(agent.runtime) });
+    }
     const machineId = paseoRuntimeService.resolveStartMachineId(agent);
     if (!machineId) return reply.status(503).send({ error: 'No connected machine available for agent runtime' });
 
@@ -212,7 +221,7 @@ export async function agentRoutes(app: FastifyInstance) {
 
     if (!sent) return reply.status(503).send({ error: 'Machine not connected' });
 
-    const updated = (await store.updateAgent(agent.id, { machineId, status: 'starting', autoStart: true }))!;
+    const updated = (await store.updateAgent(agent.id, { machineId, autoStart: true }))!;
     eventBus.emit({ type: 'agent:update', agent: updated });
     return updated;
   });
@@ -234,7 +243,11 @@ function isUnsafeWorkspacePath(value: string): boolean {
 
 async function deliverDirectMessage(target: Agent, dm: DirectMessage): Promise<void> {
   if (target.status === 'inactive') return;
-  await paseoRuntimeService.deliverMessage({
+  if (!isRuntimeSupported(target.runtime)) {
+    await markUnsupportedRuntime(target, 'deliver-direct-message');
+    return;
+  }
+  await deliverWithRetry(target, 'deliver-direct-message', async () => paseoRuntimeService.deliverMessage({
     target,
     seq: Date.now(),
     channelId: `dm:${dm.fromAgentId}:${dm.toAgentId}`,
@@ -247,5 +260,5 @@ async function deliverDirectMessage(target: Agent, dm: DirectMessage): Promise<v
       createdAt: dm.createdAt,
     },
     inboxSummary: await buildOpenTaskSummary(target),
-  });
+  }));
 }

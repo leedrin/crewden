@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Agent, AgentActivity, DirectMessage, DirectMessageThread, Machine, Reminder, Task } from '../api.js';
-import { cancelReminder, createAgentReminder, deleteAgent, getAgentDirectMessages, getAgentDmThreads, patchAgent, sendAgentDirectMessage } from '../api.js';
+import { cancelReminder, createAgentReminder, deleteAgent, getAgentDirectMessages, getAgentDmThreads, patchAgent, sendAgentDirectMessage, startAgent, stopAgent } from '../api.js';
 import { WorkspaceBrowser } from './WorkspaceBrowser.js';
 
 type Props = {
@@ -96,6 +96,7 @@ function Profile({ agent, machines, tasks, onAgentUpdated, onAgentDeleted }: {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | undefined>();
   const [deleting, setDeleting] = useState(false);
+  const [operating, setOperating] = useState(false);
 
   useEffect(() => {
     setRuntime(agent.runtime);
@@ -143,6 +144,47 @@ function Profile({ agent, machines, tasks, onAgentUpdated, onAgentDeleted }: {
   const machine = agent.machineId ? machines.find((item) => item.id === agent.machineId) : undefined;
   const machineLabel = formatMachineLabel(agent.machineId, machine);
   const busy = ['starting', 'running', 'working'].includes(agent.status);
+  const canStart = ['inactive', 'error'].includes(agent.status);
+  const canStop = ['starting', 'running', 'working', 'idle'].includes(agent.status);
+
+  const toggleAutoStart = async () => {
+    setSaving(true);
+    setError(undefined);
+    try {
+      const updated = await patchAgent(agent.id, { autoStart: !agent.autoStart });
+      onAgentUpdated(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'AUTO START UPDATE FAILED');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleStart = async () => {
+    setOperating(true);
+    setError(undefined);
+    try {
+      const updated = await startAgent(agent.id);
+      onAgentUpdated(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'START FAILED');
+    } finally {
+      setOperating(false);
+    }
+  };
+
+  const handleStop = async () => {
+    setOperating(true);
+    setError(undefined);
+    try {
+      const updated = await stopAgent(agent.id);
+      onAgentUpdated(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'STOP FAILED');
+    } finally {
+      setOperating(false);
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -155,6 +197,21 @@ function Profile({ agent, machines, tasks, onAgentUpdated, onAgentDeleted }: {
           <div style={{ fontSize: 13, fontWeight: 700, overflowWrap: 'anywhere' }}>{agent.name}</div>
           <div style={{ marginTop: 4, fontSize: 11, color: '#555' }}>{agent.runtime.toUpperCase()} / {agent.status.toUpperCase()}</div>
         </div>
+      </div>
+      <div style={{ border: '2px solid #000', background: '#fff', padding: 9, display: 'grid', gap: 8 }}>
+        <strong style={{ fontSize: 12 }}>RUNTIME CONTROL</strong>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={handleStart} disabled={!canStart || operating} style={buttonStyle('#000', '#FFD700')}>
+            {operating && canStart ? 'STARTING' : 'START'}
+          </button>
+          <button onClick={handleStop} disabled={!canStop || operating} style={buttonStyle('#fff', '#000')}>
+            {operating && canStop ? 'STOPPING' : 'STOP'}
+          </button>
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, fontWeight: 700 }}>
+          <input type="checkbox" checked={Boolean(agent.autoStart)} disabled={saving || operating} onChange={toggleAutoStart} />
+          AUTO START
+        </label>
       </div>
       <RuntimeSelect
         value={runtime}

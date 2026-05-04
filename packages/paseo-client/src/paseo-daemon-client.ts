@@ -24,6 +24,20 @@ export type PaseoAgentHandle = {
   snapshot: PaseoAgentSnapshot;
 };
 
+export type PaseoPermissionResponse =
+  | {
+      behavior: "allow";
+      selectedActionId?: string;
+      updatedInput?: Record<string, unknown>;
+      updatedPermissions?: Record<string, unknown>[];
+    }
+  | {
+      behavior: "deny";
+      selectedActionId?: string;
+      message?: string;
+      interrupt?: boolean;
+    };
+
 type StreamCallback = (paseoAgentId: string, event: PaseoStreamEvent) => void;
 type StateCallback = (state: PaseoConnectionState) => void;
 type AgentUpdateCallback = (agentId: string, snapshot: PaseoAgentSnapshot) => void;
@@ -160,6 +174,37 @@ export class PaseoDaemonClient {
     return { paseoAgentId: snapshot.id, snapshot };
   }
 
+  async fetchAgent(paseoAgentId: string): Promise<PaseoAgentSnapshot | undefined> {
+    this.requireConnected();
+    const requestId = this.createRequestId();
+    this.sendSessionMessage({
+      type: "fetch_agent_request",
+      requestId,
+      agentId: paseoAgentId,
+    });
+
+    const response = await this.waitForRequest(requestId, (msg: Record<string, unknown>) => {
+      if (msg.type !== "fetch_agent_response") return null;
+      const payload = msg.payload as Record<string, unknown> | undefined;
+      if (payload?.requestId !== requestId) return null;
+      return {
+        agent: payload.agent as Record<string, unknown> | null | undefined,
+        error: payload.error as string | null | undefined,
+      };
+    });
+
+    if (response.error) {
+      throw new Error(response.error);
+    }
+    if (!response.agent) {
+      this.agentStatuses.delete(paseoAgentId);
+      return undefined;
+    }
+    const snapshot = this.parseAgentSnapshot(response.agent);
+    this.agentStatuses.set(snapshot.id, snapshot);
+    return snapshot;
+  }
+
   async sendMessage(paseoAgentId: string, text: string): Promise<void> {
     this.requireConnected();
     const requestId = this.createRequestId();
@@ -221,6 +266,20 @@ export class PaseoDaemonClient {
       return null;
     });
     this.agentStatuses.delete(paseoAgentId);
+  }
+
+  async respondToPermission(
+    paseoAgentId: string,
+    permissionRequestId: string,
+    response: PaseoPermissionResponse,
+  ): Promise<void> {
+    this.requireConnected();
+    this.sendSessionMessage({
+      type: "agent_permission_response",
+      agentId: paseoAgentId,
+      requestId: permissionRequestId,
+      response,
+    });
   }
 
   onStreamEvent(callback: StreamCallback): Unsubscribe {
@@ -347,7 +406,8 @@ export class PaseoDaemonClient {
   private handleSessionMessage(msg: Record<string, unknown>): void {
     if (msg.type === "status") {
       const payload = msg.payload as Record<string, unknown> | undefined;
-      if (payload?.daemonVersion) {
+      const daemonVersion = payload?.daemonVersion ?? payload?.version;
+      if (typeof daemonVersion === "string" && daemonVersion.length > 0) {
         this.clearConnectTimeout();
         this.reconnectAttempts = 0;
         this.setState("connected");
@@ -437,6 +497,8 @@ export class PaseoDaemonClient {
       pending.resolve(true);
     } else if (msg.type === "agent_deleted" && payload?.requestId === requestId) {
       pending.resolve(true);
+    } else if (msg.type === "fetch_agent_response" && payload?.requestId === requestId) {
+      pending.resolve({ agent: payload.agent, error: payload.error });
     } else if (payload?.requestId === requestId) {
       pending.resolve(msg);
     }
@@ -533,11 +595,65 @@ export class PaseoDaemonClient {
   }
 
   private parseAgentSnapshot(raw: Record<string, unknown>): PaseoAgentSnapshot {
+    const runtimeInfo = raw.runtimeInfo as Record<string, unknown> | undefined;
+    const persistence = raw.persistence as Record<string, unknown> | null | undefined;
+    const sessionId = (runtimeInfo?.sessionId as string | null | undefined) ?? (persistence?.sessionId as string | undefined);
+    const pendingPermissions: PaseoAgentSnapshot["pendingPermissions"] = [];
+    if (Array.isArray(raw.pendingPermissions)) {
+      for (const item of raw.pendingPermissions) {
+        if (!item || typeof item !== "object") continue;
+        const record = item as Record<string, unknown>;
+        const id = typeof record.id === "string" ? record.id : "";
+        const name = typeof record.name === "string"
+          ? record.name
+          : typeof record.tool === "string"
+            ? record.tool
+            : "";
+        if (!id || !name) continue;
+        const kind = typeof record.kind === "string"
+          && ["tool", "plan", "question", "mode", "other"].includes(record.kind)
+          ? record.kind as "tool" | "plan" | "question" | "mode" | "other"
+          : "other";
+        const title = typeof record.title === "string" ? record.title : undefined;
+        const description = typeof record.description === "string" ? record.description : undefined;
+        const actions: NonNullable<NonNullable<PaseoAgentSnapshot["pendingPermissions"]>[number]["actions"]> = [];
+        if (Array.isArray(record.actions)) {
+          for (const entry of record.actions) {
+            if (!entry || typeof entry !== "object") continue;
+            const action = entry as Record<string, unknown>;
+            const actionId = typeof action.id === "string" ? action.id : "";
+            const label = typeof action.label === "string" ? action.label : "";
+            const behavior = action.behavior === "allow" || action.behavior === "deny"
+              ? action.behavior
+              : undefined;
+            if (!actionId || !label || !behavior) continue;
+            const variant = action.variant === "primary" || action.variant === "secondary" || action.variant === "danger"
+              ? action.variant
+              : undefined;
+            const intent = action.intent === "implement" || action.intent === "implement_resume" || action.intent === "dismiss"
+              ? action.intent
+              : undefined;
+            actions.push({ id: actionId, label, behavior, variant, intent });
+          }
+        }
+        pendingPermissions.push({
+          id,
+          name,
+          kind,
+          title,
+          description,
+          actions: actions.length > 0 ? actions : undefined,
+        });
+      }
+    }
     return {
       id: raw.id as string,
       lifecycle: (raw.lifecycle ?? raw.status ?? "idle") as string,
       provider: (raw.provider as string) ?? "unknown",
       cwd: (raw.cwd as string) ?? "",
+      sessionId: sessionId ?? undefined,
+      updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : undefined,
+      pendingPermissions: pendingPermissions.length > 0 ? pendingPermissions : undefined,
       title: raw.title as string | undefined,
       labels: raw.labels as Record<string, string> | undefined,
     };

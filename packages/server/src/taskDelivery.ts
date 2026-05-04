@@ -4,6 +4,8 @@ import { getStore } from './db.js';
 import { eventBus } from './events.js';
 import { matchesAgentCapability } from './taskMatching.js';
 import { paseoRuntimeService } from './runtime/paseo-runtime-service.js';
+import { deliverWithRetry } from './runtime/delivery-reliability.js';
+import { isRuntimeSupported, markUnsupportedRuntime } from './runtime/runtime-support.js';
 
 const ACTIVE_STATUSES = new Set(['starting', 'running', 'working', 'idle']);
 
@@ -16,14 +18,18 @@ export async function notifyTaskAssignee(task: Task): Promise<void> {
 
   const message = toTaskDelivery(task);
   const inboxSummary = await buildOpenTaskSummary(target);
+  if (!isRuntimeSupported(target.runtime)) {
+    await markUnsupportedRuntime(target, 'task-notify');
+    return;
+  }
   if (ACTIVE_STATUSES.has(target.status)) {
-    await paseoRuntimeService.deliverMessage({
+    await deliverWithRetry(target, 'task-notify', async () => paseoRuntimeService.deliverMessage({
       target,
       seq: Date.now(),
       channelId: message.channelId,
       message,
       inboxSummary,
-    });
+    }));
     return;
   }
 
@@ -39,7 +45,7 @@ export async function notifyTaskAssignee(task: Task): Promise<void> {
     inboxSummary,
   });
   if (!sent) return;
-  const updated = await store.updateAgent(target.id, { machineId, status: 'starting' });
+  const updated = await store.updateAgent(target.id, { machineId });
   if (updated) eventBus.emit({ type: 'agent:update', agent: updated });
 }
 

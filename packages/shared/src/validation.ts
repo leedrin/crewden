@@ -561,6 +561,15 @@ export const InternalTaskListRequestSchema = z.object({
   }, z.boolean()).default(false),
 });
 
+export const InternalTaskCreateRequestSchema = z.object({
+  channel: z.string().min(1).default('general'),
+  title: z.string().min(1).max(200),
+  creatorName: z.string().min(1).default('user'),
+  assigneeId: z.string().optional(),
+  context: TaskContextSchema.optional(),
+  messageId: z.string().optional(),
+});
+
 export const InternalTaskUpdateRequestSchema = z
   .object({
     status: TaskStatusSchema.optional(),
@@ -624,6 +633,10 @@ export const InternalGoalListRequestSchema = z.object({
   status: GoalBriefStatusSchema.optional(),
 });
 
+export const InternalChannelCreateRequestSchema = z.object({
+  name: z.string().trim().min(1).max(80).refine((value) => !/[\r\n\t]/.test(value), 'Channel name cannot contain control characters'),
+});
+
 export const InternalGoalCreateRequestSchema = z.object({
   channel: z.string().min(1).default('general'),
   objective: z.string().min(1),
@@ -660,6 +673,7 @@ export type InternalDmSendRequest = z.infer<typeof InternalDmSendRequestSchema>;
 export type InternalAgentDelegateRequest = z.infer<typeof InternalAgentDelegateRequestSchema>;
 export type InternalAgentResolveRequest = z.infer<typeof InternalAgentResolveRequestSchema>;
 export type InternalTaskListRequest = z.infer<typeof InternalTaskListRequestSchema>;
+export type InternalTaskCreateRequest = z.infer<typeof InternalTaskCreateRequestSchema>;
 export type InternalTaskUpdateRequest = z.infer<typeof InternalTaskUpdateRequestSchema>;
 export type InternalTaskHandoffRequest = z.infer<typeof InternalTaskHandoffRequestSchema>;
 export type InternalInboxRequest = z.infer<typeof InternalInboxRequestSchema>;
@@ -673,6 +687,7 @@ export type CreateKnowledgeEntryRequest = z.infer<typeof CreateKnowledgeEntryReq
 export type PatchKnowledgeEntryRequest = z.infer<typeof PatchKnowledgeEntryRequestSchema>;
 export type SearchKnowledgeRequest = z.infer<typeof SearchKnowledgeRequestSchema>;
 export type InternalGoalListRequest = z.infer<typeof InternalGoalListRequestSchema>;
+export type InternalChannelCreateRequest = z.infer<typeof InternalChannelCreateRequestSchema>;
 export type InternalGoalCreateRequest = z.infer<typeof InternalGoalCreateRequestSchema>;
 export type InternalGoalCreateTasksRequest = z.infer<typeof InternalGoalCreateTasksRequestSchema>;
 export type InternalGoalAlignRequest = z.infer<typeof InternalGoalAlignRequestSchema>;

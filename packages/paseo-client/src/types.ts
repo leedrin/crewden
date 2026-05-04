@@ -70,6 +70,22 @@ export type PaseoAgentSnapshot = {
   lifecycle: string;
   provider: string;
   cwd: string;
+  sessionId?: string;
+  updatedAt?: string;
+  pendingPermissions?: Array<{
+    id: string;
+    name: string;
+    kind: "tool" | "plan" | "question" | "mode" | "other";
+    title?: string;
+    description?: string;
+    actions?: Array<{
+      id: string;
+      label: string;
+      behavior: "allow" | "deny";
+      variant?: "primary" | "secondary" | "danger";
+      intent?: "implement" | "implement_resume" | "dismiss";
+    }>;
+  }>;
   title?: string;
   labels?: Record<string, string>;
 };

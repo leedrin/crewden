@@ -16,10 +16,12 @@ import { initDb, resetVolatileState } from './db.js';
 import { createVersionInfo } from '@crewden/shared';
 import { startReminderScheduler } from './reminders.js';
 import { browserAuthConfigured, requireBrowserAuth } from './browserAuth.js';
+import { reconcileUnsupportedRuntimeAgents } from './runtime/runtime-support.js';
 
 export async function buildApp(opts: { logger?: boolean } = {}) {
   await initDb();
   await resetVolatileState();
+  await reconcileUnsupportedRuntimeAgents();
 
   const app = Fastify({ logger: opts.logger ?? false });
 

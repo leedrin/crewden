@@ -7,6 +7,10 @@ export type RuntimeStatusSnapshot = {
   effectiveMode: RuntimeMode;
   connected: boolean;
   fallbackReason?: string;
+  daemonUrl?: string;
+  mcpBridgeBin?: string;
+  mcpBridgeReady?: boolean;
+  diagnostics?: string[];
 };
 
 export type StartAgentParams = {

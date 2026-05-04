@@ -53,9 +53,9 @@ export class CrewdenContextInjector {
       "You have access to crewden collaboration tools via MCP.",
       "Use MCP tools for message sending, DMs, delegation, task management, and knowledge.",
       "Prefer MCP tools over CLI commands when available.",
-      "Use `check_messages` to check for queued messages.",
-      "Use `list_tasks` to view tasks assigned to you.",
-      "Use `delegate_agent` to delegate work to another agent.",
+      "Use `crewden_check_messages` to check for queued messages.",
+      "Use `crewden_list_tasks` to view tasks assigned to you.",
+      "Use `crewden_delegate` to delegate work to another agent.",
       "If MCP tools are unavailable, send a chat reply by outputting exactly one line:",
       '[[CREWDEN_SEND_MESSAGE]] {"content":"your message here"}',
     ].join("\n");

@@ -4,6 +4,8 @@ import { getStore } from './db.js';
 import { eventBus } from './events.js';
 import { buildOpenTaskSummary } from './taskDelivery.js';
 import { paseoRuntimeService } from './runtime/paseo-runtime-service.js';
+import { deliverWithRetry } from './runtime/delivery-reliability.js';
+import { isRuntimeSupported, markUnsupportedRuntime, unsupportedRuntimeError } from './runtime/runtime-support.js';
 
 const ACTIVE_STATUSES = new Set(['starting', 'running', 'working', 'idle']);
 
@@ -67,6 +69,11 @@ export async function delegateAgent(input: {
   eventBus.emit({ type: 'dm:new', dm });
 
   if (ACTIVE_STATUSES.has(target.status)) {
+    if (!isRuntimeSupported(target.runtime)) {
+      await markUnsupportedRuntime(target, 'delegate-delivery');
+      delegation = await updateDelegation(delegation.id, 'failed', unsupportedRuntimeError(target.runtime));
+      return delegation;
+    }
     const sent = await deliverDelegation(target, dm);
     delegation = await updateDelegation(delegation.id, sent ? 'delivered' : 'failed', sent ? undefined : 'Machine not connected');
     return delegation;
@@ -74,6 +81,12 @@ export async function delegateAgent(input: {
 
   if (input.startIfInactive === false) {
     delegation = await updateDelegation(delegation.id, 'queued');
+    return delegation;
+  }
+
+  if (!isRuntimeSupported(target.runtime)) {
+    await markUnsupportedRuntime(target, 'delegate-start');
+    delegation = await updateDelegation(delegation.id, 'failed', unsupportedRuntimeError(target.runtime));
     return delegation;
   }
 
@@ -95,20 +108,20 @@ export async function delegateAgent(input: {
     return delegation;
   }
 
-  const updatedAgent = await store.updateAgent(target.id, { machineId, status: 'starting' });
+  const updatedAgent = await store.updateAgent(target.id, { machineId });
   if (updatedAgent) eventBus.emit({ type: 'agent:update', agent: updatedAgent });
   delegation = await updateDelegation(delegation.id, 'started');
   return delegation;
 }
 
 async function deliverDelegation(target: Agent, dm: DirectMessage): Promise<boolean> {
-  return paseoRuntimeService.deliverMessage({
+  return deliverWithRetry(target, 'delegate-delivery', async () => paseoRuntimeService.deliverMessage({
     target,
     seq: Date.now(),
     channelId: `dm:${dm.fromAgentId}:${dm.toAgentId}`,
     message: toDelegationDelivery(dm),
     inboxSummary: await buildOpenTaskSummary(target),
-  });
+  }));
 }
 
 function toDelegationDelivery(dm: DirectMessage) {

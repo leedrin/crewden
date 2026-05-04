@@ -87,6 +87,61 @@ describe("TimelineToEventBridge", () => {
     }
   });
 
+  it("maps CREWDEN_SEND_MESSAGE marker output to plain content", () => {
+    const bridge = new TimelineToEventBridge();
+    const result = bridge.mapStreamEvent(
+      {
+        type: "timeline",
+        item: {
+          type: "assistant_message",
+          text: '[[CREWDEN_SEND_MESSAGE]] {"content":"收到"}',
+        },
+      } as PaseoStreamEvent,
+      "agent-1",
+      "general",
+    );
+    expect(result?.type).toBe("agent:message");
+    if (result?.type === "agent:message") {
+      expect(result.content).toBe("收到");
+    }
+  });
+
+  it("buffers fragmented CREWDEN_SEND_MESSAGE marker output", () => {
+    const bridge = new TimelineToEventBridge();
+    const first = bridge.mapStreamEvent(
+      {
+        type: "timeline",
+        item: { type: "assistant_message", text: "[[CRE" },
+      } as PaseoStreamEvent,
+      "agent-1",
+      "general",
+    );
+    expect(first).toBeNull();
+
+    const second = bridge.mapStreamEvent(
+      {
+        type: "timeline",
+        item: { type: "assistant_message", text: 'WDEN_SEND_MESSAGE]] {"content":"收' },
+      } as PaseoStreamEvent,
+      "agent-1",
+      "general",
+    );
+    expect(second).toBeNull();
+
+    const third = bridge.mapStreamEvent(
+      {
+        type: "timeline",
+        item: { type: "assistant_message", text: '到"}' },
+      } as PaseoStreamEvent,
+      "agent-1",
+      "general",
+    );
+    expect(third?.type).toBe("agent:message");
+    if (third?.type === "agent:message") {
+      expect(third.content).toBe("收到");
+    }
+  });
+
   it("detects crewden tool calls from timeline items", () => {
     const bridge = new TimelineToEventBridge();
     const result = bridge.mapStreamEvent(
@@ -107,24 +162,80 @@ describe("TimelineToEventBridge", () => {
     expect(result?.type).toBe("crewden:tool_call");
   });
 
-  it("maps turn_completed to idle status", () => {
+  it("maps turn_completed to idle activity", () => {
     const bridge = new TimelineToEventBridge();
     const result = bridge.mapStreamEvent(
       { type: "turn_completed" } as PaseoStreamEvent,
       "agent-1",
       "general",
     );
-    expect(result?.type).toBe("agent:status");
+    expect(result?.type).toBe("agent:activity");
+    if (result?.type === "agent:activity") {
+      expect(result.activityType).toBe("idle");
+    }
   });
 
-  it("maps turn_failed to error status", () => {
+  it("maps turn_failed to error activity", () => {
     const bridge = new TimelineToEventBridge();
     const result = bridge.mapStreamEvent(
       { type: "turn_failed", error: "something broke" } as PaseoStreamEvent,
       "agent-1",
       "general",
     );
-    expect(result?.type).toBe("agent:status");
+    expect(result?.type).toBe("agent:activity");
+    if (result?.type === "agent:activity") {
+      expect(result.activityType).toBe("error");
+      expect(result.detail).toBe("something broke");
+    }
+  });
+
+  it("maps thread_started to agent session event", () => {
+    const bridge = new TimelineToEventBridge();
+    const result = bridge.mapStreamEvent(
+      { type: "thread_started", sessionId: "sess-123" } as PaseoStreamEvent,
+      "agent-1",
+      "general",
+    );
+    expect(result?.type).toBe("agent:session");
+    if (result?.type === "agent:session") {
+      expect(result.sessionId).toBe("sess-123");
+    }
+  });
+
+  it("maps permission events to activities", () => {
+    const bridge = new TimelineToEventBridge();
+    const requested = bridge.mapStreamEvent(
+      { type: "permission_requested" } as PaseoStreamEvent,
+      "agent-1",
+      "general",
+    );
+    expect(requested?.type).toBe("agent:activity");
+    if (requested?.type === "agent:activity") {
+      expect(requested.detail).toBe("permission:requested");
+    }
+    const resolved = bridge.mapStreamEvent(
+      { type: "permission_resolved", requestId: "per-1" } as PaseoStreamEvent,
+      "agent-1",
+      "general",
+    );
+    expect(resolved?.type).toBe("agent:activity");
+    if (resolved?.type === "agent:activity") {
+      expect(resolved.detail).toBe("permission:resolved:per-1");
+    }
+  });
+
+  it("maps turn_canceled to error activity", () => {
+    const bridge = new TimelineToEventBridge();
+    const result = bridge.mapStreamEvent(
+      { type: "turn_canceled", reason: "interrupted" } as PaseoStreamEvent,
+      "agent-1",
+      "general",
+    );
+    expect(result?.type).toBe("agent:activity");
+    if (result?.type === "agent:activity") {
+      expect(result.activityType).toBe("error");
+      expect(result.detail).toBe("turn_canceled:interrupted");
+    }
   });
 });
 

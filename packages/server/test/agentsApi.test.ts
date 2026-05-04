@@ -93,6 +93,27 @@ describe('POST /api/channels/:id/messages', () => {
     await app.close();
   });
 
+  it('deduplicates retried message requests with x-idempotency-key', async () => {
+    const app = await buildApp();
+    const payload = { senderName: 'user', content: 'Hello once' };
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/channels/general/messages',
+      headers: { 'x-idempotency-key': 'msg-1' },
+      payload,
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/channels/general/messages',
+      headers: { 'x-idempotency-key': 'msg-1' },
+      payload,
+    });
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(200);
+    expect(first.json().id).toBe(second.json().id);
+    await app.close();
+  });
+
   it('persists thread replies separately from channel messages', async () => {
     const app = await buildApp();
     const store = getStore();
@@ -212,6 +233,18 @@ describe('POST /api/agents', () => {
       payload: { name: 'a', runtime: 'gpt4' },
     });
     expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('returns 422 for gemini runtime in paseo mode', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/agents',
+      payload: { name: 'gemini-agent', runtime: 'gemini' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toContain("Runtime 'gemini'");
     await app.close();
   });
 });
@@ -352,6 +385,28 @@ describe('DELETE /api/agents/:id', () => {
   });
 });
 
+describe('POST /api/agents/:id/start', () => {
+  it('returns 422 and marks unsupported runtime as error', async () => {
+    const app = await buildApp();
+    await getStore().createAgent({
+      id: 'agent-gemini',
+      name: 'gemini-agent',
+      runtime: 'gemini',
+      status: 'running',
+      autoStart: true,
+      createdAt: new Date().toISOString(),
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-gemini/start',
+    });
+    expect(res.statusCode).toBe(422);
+    const updated = await getStore().getAgent('agent-gemini');
+    expect(updated?.status).toBe('error');
+    await app.close();
+  });
+});
+
 describe('agent direct messages API', () => {
   it('creates a DM and lists it in threads and conversation', async () => {
     const app = await buildApp();
@@ -385,11 +440,12 @@ describe('agent direct messages API', () => {
 describe('GET /api/agents', () => {
   it('lists agents', async () => {
     const app = await buildApp();
-    await app.inject({
+    const created = await app.inject({
       method: 'POST',
       url: '/api/agents',
-      payload: { name: 'agent-1', runtime: 'gemini' },
+      payload: { name: 'agent-1', runtime: 'codex' },
     });
+    expect(created.statusCode).toBe(201);
     const res = await app.inject({ method: 'GET', url: '/api/agents' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toHaveLength(1);
@@ -486,6 +542,38 @@ describe('agent internal API', () => {
     expect(info.statusCode).toBe(200);
     expect(info.json().channels[0].id).toBe('general');
     expect(info.json().version.component).toBe('server');
+    await app.close();
+  });
+
+  it('creates channels and tasks through internal agent endpoints', async () => {
+    const { app, headers } = await createInternalAgent();
+    const createdChannel = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/agent-1/channels/create',
+      headers,
+      payload: { name: 'ops-room' },
+    });
+    expect(createdChannel.statusCode).toBe(201);
+    expect(createdChannel.json()).toMatchObject({ name: 'ops-room' });
+
+    const createdTask = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/agent-1/tasks/create',
+      headers,
+      payload: {
+        channel: 'ops-room',
+        title: 'verify integration pipeline',
+        context: { goal: 'Ship MCP toolset' },
+      },
+    });
+    expect(createdTask.statusCode).toBe(201);
+    expect(createdTask.json()).toMatchObject({
+      channelId: createdChannel.json().id,
+      title: 'verify integration pipeline',
+      creatorName: 'user',
+      status: 'todo',
+      context: { goal: 'Ship MCP toolset' },
+    });
     await app.close();
   });
 

@@ -1,14 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Agent, Machine, RuntimeStatus } from '../api.js';
-import { createAgent, deleteAgent, startAgent, stopAgent } from '../api.js';
+import { createAgent, deleteAgent, respondRuntimePermission, startAgent, stopAgent } from '../api.js';
 
 type Props = {
   agents: Agent[];
   machines: Machine[];
   runtimeStatus?: RuntimeStatus;
   onAgentsChange: () => void;
+  onRuntimeStatusRefresh?: () => void | Promise<void>;
   onClose?: () => void;
 };
+type PendingPermission = NonNullable<RuntimeStatus['agentHealth']>[number]['pendingPermissions'][number];
 
 const FONT = "'Courier New', monospace";
 
@@ -24,7 +26,13 @@ const inputStyle: React.CSSProperties = {
   outline: 'none',
 };
 
-export function AgentPanel({ agents, machines, runtimeStatus, onAgentsChange, onClose }: Props) {
+const AUTO_ALLOW_RULES_KEY = 'crewden_auto_allow_rules_v1';
+
+function buildAutoAllowRuleKey(agentId: string, kind: string, name: string): string {
+  return `${agentId}::${kind}::${name}`;
+}
+
+export function AgentPanel({ agents, machines, runtimeStatus, onAgentsChange, onRuntimeStatusRefresh, onClose }: Props) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     name: '',
@@ -38,6 +46,18 @@ export function AgentPanel({ agents, machines, runtimeStatus, onAgentsChange, on
   const [deleteTarget, setDeleteTarget] = useState<Agent | undefined>();
   const [deleteError, setDeleteError] = useState<string | undefined>();
   const [deleting, setDeleting] = useState(false);
+  const [permissionActionKey, setPermissionActionKey] = useState<string | undefined>();
+  const [permissionActionError, setPermissionActionError] = useState<string | undefined>();
+  const [autoAllowRules, setAutoAllowRules] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(AUTO_ALLOW_RULES_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
+  const autoAttemptedPermissionIdsRef = useRef<Set<string>>(new Set());
 
   const onlineMachines = machines.filter((m) => m.status === 'online');
 
@@ -79,6 +99,102 @@ export function AgentPanel({ agents, machines, runtimeStatus, onAgentsChange, on
       setDeleteError(err instanceof Error ? err.message : 'DELETE FAILED');
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handlePermission = async (
+    agentId: string,
+    permissionId: string,
+    behavior: 'allow' | 'deny',
+    selectedActionId?: string,
+    options?: { silent?: boolean },
+  ) => {
+    const key = `${agentId}:${permissionId}:${behavior}:${selectedActionId ?? ''}`;
+    setPermissionActionKey(key);
+    if (!options?.silent) setPermissionActionError(undefined);
+    try {
+      await respondRuntimePermission(agentId, permissionId, { behavior, selectedActionId });
+      await onAgentsChange();
+      await onRuntimeStatusRefresh?.();
+    } catch (err) {
+      if (!options?.silent) {
+        setPermissionActionError(err instanceof Error ? err.message : 'PERMISSION ACTION FAILED');
+      }
+      throw err;
+    } finally {
+      setPermissionActionKey(undefined);
+    }
+  };
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AUTO_ALLOW_RULES_KEY, JSON.stringify(autoAllowRules));
+    } catch {
+      // ignore persistence failures
+    }
+  }, [autoAllowRules]);
+
+  useEffect(() => {
+    const health = runtimeStatus?.agentHealth ?? [];
+    const pendingIds = new Set<string>();
+    for (const item of health) {
+      for (const permission of item.pendingPermissions) {
+        pendingIds.add(permission.id);
+      }
+    }
+    for (const attempted of Array.from(autoAttemptedPermissionIdsRef.current)) {
+      if (!pendingIds.has(attempted)) {
+        autoAttemptedPermissionIdsRef.current.delete(attempted);
+      }
+    }
+    if (permissionActionKey) return;
+    for (const item of health) {
+      for (const permission of item.pendingPermissions) {
+        const ruleKey = buildAutoAllowRuleKey(item.id, permission.kind, permission.name);
+        if (!autoAllowRules.includes(ruleKey)) continue;
+        if (autoAttemptedPermissionIdsRef.current.has(permission.id)) continue;
+        autoAttemptedPermissionIdsRef.current.add(permission.id);
+        const selectedActionId = permission.actions?.find((action) => action.behavior === 'allow')?.id;
+        void handlePermission(item.id, permission.id, 'allow', selectedActionId, { silent: true })
+          .catch(() => {
+            autoAttemptedPermissionIdsRef.current.delete(permission.id);
+          });
+        return;
+      }
+    }
+  }, [autoAllowRules, permissionActionKey, runtimeStatus]);
+
+  const toggleAutoAllow = (agentId: string, kind: string, name: string) => {
+    const key = buildAutoAllowRuleKey(agentId, kind, name);
+    setAutoAllowRules((current) => (
+      current.includes(key)
+        ? current.filter((entry) => entry !== key)
+        : [...current, key]
+    ));
+  };
+
+  const handleAllowAll = async (
+    agentId: string,
+    pendingPermissions: PendingPermission[],
+  ) => {
+    if (pendingPermissions.length === 0) return;
+    setPermissionActionError(undefined);
+    const batchKey = `batch:${agentId}`;
+    setPermissionActionKey(batchKey);
+    try {
+      for (const permission of pendingPermissions) {
+        const selectedActionId = permission.actions?.find((action) => action.behavior === 'allow')?.id;
+        await respondRuntimePermission(agentId, permission.id, {
+          behavior: 'allow',
+          selectedActionId,
+        });
+      }
+      await onAgentsChange();
+      await onRuntimeStatusRefresh?.();
+    } catch (err) {
+      setPermissionActionError(err instanceof Error ? err.message : 'ALLOW ALL FAILED');
+    } finally {
+      setPermissionActionKey(undefined);
     }
   };
 
@@ -132,11 +248,136 @@ export function AgentPanel({ agents, machines, runtimeStatus, onAgentsChange, on
             display: 'grid',
             gap: 4,
           }}>
-            <div style={{ fontSize: 10, fontWeight: 700 }}>RUNTIME DIAGNOSTICS</div>
+            <div style={{ fontSize: 10, fontWeight: 700, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>RUNTIME DIAGNOSTICS</span>
+              <PxButton
+                onClick={() => { void onRuntimeStatusRefresh?.(); }}
+                bg="#fff"
+                color="#000"
+                small
+              >
+                REFRESH
+              </PxButton>
+            </div>
             <div>EFFECTIVE: <strong>{runtimeStatus.mode.toUpperCase()}</strong></div>
             <div>CONFIGURED: <strong>{runtimeStatus.configuredMode.toUpperCase()}</strong></div>
             <div>CONNECTED: <strong>{runtimeStatus.connected ? 'YES' : 'NO'}</strong></div>
+            {runtimeStatus.daemonUrl ? <div>DAEMON URL: <strong>{runtimeStatus.daemonUrl}</strong></div> : null}
+            <div>MCP BRIDGE: <strong>{runtimeStatus.mcpBridgeReady ? 'READY' : 'NOT READY'}</strong></div>
+            {runtimeStatus.mcpBridgeBin ? <div style={{ overflowWrap: 'anywhere' }}>MCP BIN: {runtimeStatus.mcpBridgeBin}</div> : null}
             {runtimeStatus.fallbackReason ? <div style={{ color: '#b00020' }}>{runtimeStatus.fallbackReason}</div> : null}
+            {runtimeStatus.diagnostics?.length ? (
+              <div style={{ color: '#b00020', borderTop: '1px solid #ddd', paddingTop: 4 }}>
+                {runtimeStatus.diagnostics.map((message) => (
+                  <div key={message}>- {message}</div>
+                ))}
+              </div>
+            ) : null}
+            {runtimeStatus.alerts?.length ? (
+              <div style={{ color: '#b00020', borderTop: '1px solid #ddd', paddingTop: 4 }}>
+                <div style={{ fontWeight: 700 }}>ALERTS</div>
+                {runtimeStatus.alerts.map((message) => (
+                  <div key={message}>- {message}</div>
+                ))}
+              </div>
+            ) : null}
+            {runtimeStatus.agentHealth?.length ? (
+              <div style={{ borderTop: '1px solid #ddd', paddingTop: 4, display: 'grid', gap: 4 }}>
+                <div style={{ fontWeight: 700 }}>AGENT HEALTH</div>
+                {runtimeStatus.agentHealth.map((item) => (
+                  <div key={item.id} style={{ border: '1px solid #ddd', padding: 4 }}>
+                    <div><strong>{item.name}</strong> · {item.status} · {item.runtimeLifecycle ?? '-'}</div>
+                    {item.pendingPermissions.length > 0 ? (
+                      <div style={{ color: '#b00020', overflowWrap: 'anywhere' }}>
+                        <div style={{ fontWeight: 700, marginBottom: 4, display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span>pending requests: {item.pendingPermissions.length}</span>
+                          <PxButton
+                            onClick={() => { void handleAllowAll(item.id, item.pendingPermissions); }}
+                            disabled={Boolean(permissionActionKey)}
+                            bg="#00c853"
+                            color="#fff"
+                            small
+                          >
+                            {permissionActionKey === `batch:${item.id}` ? 'ALLOWING...' : 'ALLOW ALL'}
+                          </PxButton>
+                        </div>
+                        {item.pendingPermissions.map((permission) => (
+                          <div
+                            key={permission.id}
+                            style={{ border: '1px solid #f0b4c4', background: '#fff7fb', padding: 4, marginBottom: 4 }}
+                          >
+                            <div><strong>[{permission.kind}] {permission.name}</strong></div>
+                            {permission.title ? <div>{permission.title}</div> : null}
+                            {permission.description ? <div>{permission.description}</div> : null}
+                            <div style={{ fontSize: 10 }}>req: {permission.id.slice(0, 8)}</div>
+                            <div style={{ marginTop: 4 }}>
+                              <PxButton
+                                onClick={() => toggleAutoAllow(item.id, permission.kind, permission.name)}
+                                disabled={Boolean(permissionActionKey)}
+                                bg={autoAllowRules.includes(buildAutoAllowRuleKey(item.id, permission.kind, permission.name)) ? '#000' : '#fff'}
+                                color={autoAllowRules.includes(buildAutoAllowRuleKey(item.id, permission.kind, permission.name)) ? '#FFD700' : '#000'}
+                                small
+                              >
+                                {autoAllowRules.includes(buildAutoAllowRuleKey(item.id, permission.kind, permission.name))
+                                  ? 'AUTO ALLOW: ON'
+                                  : 'AUTO ALLOW SAME: OFF'}
+                              </PxButton>
+                            </div>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                              {permission.actions?.length
+                                ? permission.actions.map((action) => {
+                                  const actionKey = `${item.id}:${permission.id}:${action.behavior}:${action.id}`;
+                                  const busy = permissionActionKey === actionKey;
+                                  return (
+                                    <PxButton
+                                      key={action.id}
+                                      onClick={() => { void handlePermission(item.id, permission.id, action.behavior, action.id); }}
+                                      disabled={Boolean(permissionActionKey)}
+                                      bg={action.behavior === 'allow' ? '#00c853' : '#f44336'}
+                                      color="#fff"
+                                      small
+                                    >
+                                      {busy ? 'PROCESSING' : action.label.toUpperCase()}
+                                    </PxButton>
+                                  );
+                                })
+                                : (
+                                  <>
+                                    <PxButton
+                                      onClick={() => { void handlePermission(item.id, permission.id, 'allow'); }}
+                                      disabled={Boolean(permissionActionKey)}
+                                      bg="#00c853"
+                                      color="#fff"
+                                      small
+                                    >
+                                      {permissionActionKey === `${item.id}:${permission.id}:allow:` ? 'PROCESSING' : 'ALLOW'}
+                                    </PxButton>
+                                    <PxButton
+                                      onClick={() => { void handlePermission(item.id, permission.id, 'deny'); }}
+                                      disabled={Boolean(permissionActionKey)}
+                                      bg="#f44336"
+                                      color="#fff"
+                                      small
+                                    >
+                                      {permissionActionKey === `${item.id}:${permission.id}:deny:` ? 'PROCESSING' : 'DENY'}
+                                    </PxButton>
+                                  </>
+                                )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {item.issues.length > 0 ? (
+                      <div style={{ color: '#b00020', overflowWrap: 'anywhere' }}>
+                        issues: {item.issues.join(', ')}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+                {permissionActionError ? <div style={{ color: '#b00020' }}>{permissionActionError}</div> : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
 

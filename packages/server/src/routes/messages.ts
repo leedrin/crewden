@@ -6,6 +6,8 @@ import { CreateMessageRequestSchema, type Agent, type Mention } from '@crewden/s
 import { toAgentDelivery } from '@crewden/hub-core';
 import { buildOpenTaskSummary } from '../taskDelivery.js';
 import { paseoRuntimeService } from '../runtime/paseo-runtime-service.js';
+import { cacheIdempotentMessage, deliverWithRetry, getCachedIdempotentMessage } from '../runtime/delivery-reliability.js';
+import { isRuntimeSupported, markUnsupportedRuntime } from '../runtime/runtime-support.js';
 
 export async function messageRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>('/api/channels/:id/messages', async (req, reply) => {
@@ -18,6 +20,16 @@ export async function messageRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
     }
     const { senderName, content, agentId, threadRootId } = parsed.data;
+    const idempotencyHeader = req.headers['x-idempotency-key'];
+    const idempotencyKey = typeof idempotencyHeader === 'string' ? idempotencyHeader.trim() : '';
+    if (idempotencyKey) {
+      const cached = getCachedIdempotentMessage(
+        `channel:${req.params.id}:sender:${senderName}:key:${idempotencyKey}`,
+      );
+      if (cached) {
+        return reply.status(200).send(cached);
+      }
+    }
     let normalizedThreadRootId = threadRootId;
     if (threadRootId) {
       const thread = await store.getThread(threadRootId);
@@ -36,6 +48,12 @@ export async function messageRoutes(app: FastifyInstance) {
       threadRootId: normalizedThreadRootId,
       mentions,
     });
+    if (idempotencyKey) {
+      cacheIdempotentMessage(
+        `channel:${req.params.id}:sender:${senderName}:key:${idempotencyKey}`,
+        message,
+      );
+    }
 
     if (message.threadRootId) {
       const thread = await store.getThread(message.threadRootId);
@@ -53,13 +71,17 @@ export async function messageRoutes(app: FastifyInstance) {
     for (const targetAgentId of targetAgentIds) {
       const agent = await store.getAgent(targetAgentId);
       if (agent && agent.status !== 'inactive') {
-        await paseoRuntimeService.deliverMessage({
+        if (!isRuntimeSupported(agent.runtime)) {
+          await markUnsupportedRuntime(agent, 'channel-message-delivery');
+          continue;
+        }
+        await deliverWithRetry(agent, 'channel-message-delivery', async () => paseoRuntimeService.deliverMessage({
           target: agent,
           seq: Date.now(),
           message: toAgentDelivery(message, channel),
           channelId: channel.id,
           inboxSummary: await buildOpenTaskSummary(agent),
-        });
+        }));
       }
     }
 

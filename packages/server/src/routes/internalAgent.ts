@@ -21,9 +21,11 @@ import {
   InternalTaskBlockRequestSchema,
   InternalTaskEscalateRequestSchema,
   InternalTaskListRequestSchema,
+  InternalTaskCreateRequestSchema,
   InternalTaskProgressRequestSchema,
   InternalTaskUpdateRequestSchema,
   InternalReviewListRequestSchema,
+  InternalChannelCreateRequestSchema,
   PatchAgentRequestSchema,
   PatchReminderRequestSchema,
   ReviewDecisionRequestSchema,
@@ -79,6 +81,19 @@ export async function internalAgentRoutes(app: FastifyInstance) {
         build: process.env.CREWDEN_BUILD_ID ?? process.env.GITHUB_RUN_ID,
       }),
     };
+  });
+
+  app.post<{ Params: { agentId: string } }>('/internal/agent/:agentId/channels/create', async (req, reply) => {
+    const store = getStore();
+    const agent = await store.getAgent(req.params.agentId);
+    if (!agent) return reply.status(404).send({ error: 'Agent not found' });
+    const parsed = InternalChannelCreateRequestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
+    const existing = (await store.listChannels()).find((channel) => channel.name === parsed.data.name);
+    if (existing) return reply.status(409).send({ error: 'Channel already exists', channel: existing });
+    const channel = await store.createChannel(nanoid(), parsed.data.name);
+    eventBus.emit({ type: 'channel:created', channel });
+    return reply.status(201).send(channel);
   });
 
   app.get<{ Params: { agentId: string }; Querystring: { query?: string } }>('/internal/agent/:agentId/agents/resolve', async (req, reply) => {
@@ -215,6 +230,38 @@ export async function internalAgentRoutes(app: FastifyInstance) {
       assigneeId: parsed.data.all ? undefined : agent.id,
     });
     return tasks;
+  });
+
+  app.post<{ Params: { agentId: string } }>('/internal/agent/:agentId/tasks/create', async (req, reply) => {
+    const store = getStore();
+    const agent = await store.getAgent(req.params.agentId);
+    if (!agent) return reply.status(404).send({ error: 'Agent not found' });
+    const parsed = InternalTaskCreateRequestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
+    const channel = await findChannel(parsed.data.channel);
+    if (!channel) return reply.status(404).send({ error: 'Channel not found' });
+
+    let normalizedMessageId = parsed.data.messageId;
+    if (parsed.data.messageId) {
+      const message = await store.getMessage(parsed.data.messageId);
+      if (!message) return reply.status(404).send({ error: 'Source message not found' });
+      if (message.channelId !== channel.id) return reply.status(400).send({ error: 'Source message belongs to another channel' });
+      normalizedMessageId = message.id;
+    }
+
+    const task = await store.createTask({
+      id: nanoid(),
+      channelId: channel.id,
+      messageId: normalizedMessageId,
+      title: parsed.data.title,
+      status: 'todo',
+      creatorName: parsed.data.creatorName,
+      assigneeId: parsed.data.assigneeId,
+      context: parsed.data.context,
+    });
+    eventBus.emit({ type: 'task:update', task });
+    await notifyTaskAssignee(task);
+    return reply.status(201).send(task);
   });
 
   app.get<{ Params: { agentId: string }; Querystring: { limit?: string } }>('/internal/agent/:agentId/inbox', async (req, reply) => {

@@ -25,6 +25,34 @@ export type RuntimeStatus = {
   configuredMode: 'paseo-daemon';
   connected: boolean;
   fallbackReason?: string;
+  daemonUrl?: string;
+  mcpBridgeBin?: string;
+  mcpBridgeReady?: boolean;
+  diagnostics?: string[];
+  alerts?: string[];
+  agentHealth?: Array<{
+    id: string;
+    name: string;
+    status: string;
+    runtimeInstanceId?: string;
+    runtimeLifecycle?: string;
+    pendingPermissions: Array<{
+      id: string;
+      name: string;
+      kind: 'tool' | 'plan' | 'question' | 'mode' | 'other';
+      title?: string;
+      description?: string;
+      actions?: Array<{
+        id: string;
+        label: string;
+        behavior: 'allow' | 'deny';
+        variant?: 'primary' | 'secondary' | 'danger';
+        intent?: 'implement' | 'implement_resume' | 'dismiss';
+      }>;
+    }>;
+    issues: string[];
+    lastActivityAt?: string;
+  }>;
 };
 export type VersionInfo = { component: string; version: string; commit?: string; build?: string };
 export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'blocked' | 'cancelled';
@@ -244,6 +272,34 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   const r = await apiFetch(`${API_BASE}/api/runtime/status`, { headers: authHeaders() });
   if (!r.ok) throw new Error('Failed to load runtime status');
   return r.json();
+}
+
+export async function respondRuntimePermission(
+  agentId: string,
+  permissionId: string,
+  response:
+    | {
+        behavior: 'allow';
+        selectedActionId?: string;
+        updatedInput?: Record<string, unknown>;
+        updatedPermissions?: Record<string, unknown>[];
+      }
+    | {
+        behavior: 'deny';
+        selectedActionId?: string;
+        message?: string;
+        interrupt?: boolean;
+      },
+): Promise<void> {
+  const r = await apiFetch(
+    `${API_BASE}/api/runtime/agents/${encodeURIComponent(agentId)}/permissions/${encodeURIComponent(permissionId)}/respond`,
+    {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(response),
+    },
+  );
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Permission response failed');
 }
 
 export async function getTasks(filter: { channelId?: string; status?: TaskStatus } = {}): Promise<Task[]> {

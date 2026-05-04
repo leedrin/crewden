@@ -558,6 +558,18 @@ export class SqliteStore {
     return message;
   }
 
+  async appendMessageContent(id: string, appendText: string): Promise<Message | undefined> {
+    await initDb();
+    if (!appendText) return this.getMessage(id);
+    const [existing] = await getDb().select().from(messages).where(eq(messages.id, id)).limit(1);
+    if (!existing) return undefined;
+    const nextContent = `${existing.content}${appendText}`;
+    await getDb().update(messages).set({ content: nextContent }).where(eq(messages.id, id));
+    const [updated] = await getDb().select().from(messages).where(eq(messages.id, id)).limit(1);
+    if (!updated) return undefined;
+    return toMessage(updated);
+  }
+
   async addMessage(msg: Omit<Message, 'createdAt'>): Promise<Message> {
     return this.createMessage(msg);
   }
