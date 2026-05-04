@@ -2,82 +2,94 @@ import type { PaseoStreamEvent, CrewdenEvent } from "./types.js";
 
 const CREWDEN_TOOL_PREFIX = "crewden_";
 
+/**
+ * Maps Paseo AgentStreamEvent types to Crewden events.
+ *
+ * Paseo agent_stream event types:
+ *   - thread_started / turn_started / turn_completed / turn_failed / turn_canceled
+ *   - timeline (contains item with type: user_message, assistant_message, reasoning, tool_call, todo, error, compaction)
+ *   - permission_requested / permission_resolved
+ *   - attention_required
+ *
+ * @see Paseo packages/server/src/shared/messages.ts AgentStreamEventPayloadSchema
+ */
 export class TimelineToEventBridge {
-  private accumulatedText = new Map<string, string>();
-
   mapStreamEvent(
     event: PaseoStreamEvent,
     agentId: string,
     channelId: string,
   ): CrewdenEvent | null {
     switch (event.type) {
-      case "text_delta":
-      case "assistant_text": {
-        const current = this.accumulatedText.get(agentId) ?? "";
-        if (event.text) {
-          this.accumulatedText.set(agentId, current + event.text);
+      case "timeline": {
+        const item = event.item;
+        if (!item) return null;
+
+        switch (item.type) {
+          case "assistant_message":
+            return {
+              type: "agent:message",
+              agentId,
+              channelId,
+              content: item.text ?? "",
+            };
+
+          case "reasoning":
+            return {
+              type: "agent:activity",
+              agentId,
+              activityType: "thinking",
+              detail: item.text,
+            };
+
+          case "tool_call": {
+            const toolName = item.toolName ?? "";
+            if (isCrewdenTool(toolName)) {
+              return {
+                type: "crewden:tool_call",
+                agentId,
+                toolName,
+                args: item.args,
+              };
+            }
+            return {
+              type: "agent:activity",
+              agentId,
+              activityType: "working",
+              detail: `tool:${toolName}`,
+            };
+          }
+
+          case "error":
+            return {
+              type: "agent:activity",
+              agentId,
+              activityType: "error",
+              detail: item.message,
+            };
+
+          default:
+            return { type: "agent:activity", agentId, activityType: "working" };
         }
-        return { type: "agent:activity", agentId, activityType: "working" };
       }
 
-      case "run_finished":
-      case "result": {
-        const content = this.accumulatedText.get(agentId) ?? "";
-        this.accumulatedText.delete(agentId);
-        if (content) {
-          return {
-            type: "agent:message",
-            agentId,
-            channelId,
-            content,
-          };
-        }
+      case "turn_completed":
         return { type: "agent:status", agentId, status: "idle" };
-      }
 
-      case "tool_invocation":
-      case "tool_call": {
-        const toolName = event.toolCall?.name ?? "";
-        if (isCrewdenTool(toolName)) {
-          return {
-            type: "crewden:tool_call",
-            agentId,
-            toolName,
-            args: event.toolCall?.args,
-          };
-        }
-        return {
-          type: "agent:activity",
-          agentId,
-          activityType: "working",
-          detail: `tool:${toolName}`,
-        };
-      }
+      case "turn_started":
+        return { type: "agent:activity", agentId, activityType: "working" };
 
-      case "error":
-        return {
-          type: "agent:status",
-          agentId,
-          status: "error",
-        };
+      case "turn_failed":
+        return { type: "agent:status", agentId, status: "error" };
 
-      case "thinking":
-        return { type: "agent:activity", agentId, activityType: "thinking" };
+      case "thread_started":
+        return null;
 
       default:
         return null;
     }
   }
 
-  flushAccumulatedText(agentId: string): string {
-    const text = this.accumulatedText.get(agentId) ?? "";
-    this.accumulatedText.delete(agentId);
-    return text;
-  }
-
-  clear(agentId: string): void {
-    this.accumulatedText.delete(agentId);
-  }
+  clear(_agentId: string): void {}
 }
 
 function isCrewdenTool(toolName: string): boolean {

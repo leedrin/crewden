@@ -3,6 +3,7 @@ import { InboxAdapter } from "../src/inbox-adapter.js";
 import { TimelineToEventBridge } from "../src/timeline-to-event-bridge.js";
 import { CrewdenContextInjector } from "../src/crewden-context-injector.js";
 import { mapRuntimeToProvider, supportsRuntime } from "../src/runtime-mapper.js";
+import type { PaseoStreamEvent } from "../src/types.js";
 
 describe("InboxAdapter", () => {
   it("delivers immediately when agent is idle", async () => {
@@ -72,37 +73,24 @@ describe("InboxAdapter", () => {
 });
 
 describe("TimelineToEventBridge", () => {
-  it("accumulates text and emits message on run_finished", () => {
+  it("accumulates assistant_message from timeline events", () => {
     const bridge = new TimelineToEventBridge();
 
-    const textEvent = bridge.mapStreamEvent(
-      { type: "text_delta", text: "Hello " },
+    const result = bridge.mapStreamEvent(
+      { type: "timeline", item: { type: "assistant_message", text: "Hello world" } } as PaseoStreamEvent,
       "agent-1",
       "general",
     );
-    expect(textEvent?.type).toBe("agent:activity");
-
-    bridge.mapStreamEvent(
-      { type: "text_delta", text: "world" },
-      "agent-1",
-      "general",
-    );
-
-    const finished = bridge.mapStreamEvent(
-      { type: "run_finished" },
-      "agent-1",
-      "general",
-    );
-    expect(finished?.type).toBe("agent:message");
-    if (finished?.type === "agent:message") {
-      expect(finished.content).toBe("Hello world");
+    expect(result?.type).toBe("agent:message");
+    if (result?.type === "agent:message") {
+      expect(result.content).toBe("Hello world");
     }
   });
 
-  it("detects crewden tool calls", () => {
+  it("detects crewden tool calls from timeline items", () => {
     const bridge = new TimelineToEventBridge();
     const result = bridge.mapStreamEvent(
-      { type: "tool_invocation", toolCall: { name: "crewden_send_message", args: { content: "hi" } } },
+      { type: "timeline", item: { type: "tool_call", toolName: "crewden_send_message", args: { content: "hi" } } } as PaseoStreamEvent,
       "agent-1",
       "general",
     );
@@ -112,11 +100,31 @@ describe("TimelineToEventBridge", () => {
   it("detects mcp__crewden__ prefixed tools", () => {
     const bridge = new TimelineToEventBridge();
     const result = bridge.mapStreamEvent(
-      { type: "tool_call", toolCall: { name: "mcp__crewden__send_message" } },
+      { type: "timeline", item: { type: "tool_call", toolName: "mcp__crewden__send_message" } } as PaseoStreamEvent,
       "agent-1",
       "general",
     );
     expect(result?.type).toBe("crewden:tool_call");
+  });
+
+  it("maps turn_completed to idle status", () => {
+    const bridge = new TimelineToEventBridge();
+    const result = bridge.mapStreamEvent(
+      { type: "turn_completed" } as PaseoStreamEvent,
+      "agent-1",
+      "general",
+    );
+    expect(result?.type).toBe("agent:status");
+  });
+
+  it("maps turn_failed to error status", () => {
+    const bridge = new TimelineToEventBridge();
+    const result = bridge.mapStreamEvent(
+      { type: "turn_failed", error: "something broke" } as PaseoStreamEvent,
+      "agent-1",
+      "general",
+    );
+    expect(result?.type).toBe("agent:status");
   });
 });
 
@@ -155,8 +163,8 @@ describe("CrewdenContextInjector", () => {
 });
 
 describe("runtime-mapper", () => {
-  it("maps claude to claude-code", () => {
-    expect(mapRuntimeToProvider("claude")).toBe("claude-code");
+  it("maps claude to claude", () => {
+    expect(mapRuntimeToProvider("claude")).toBe("claude");
   });
 
   it("maps codex to codex", () => {

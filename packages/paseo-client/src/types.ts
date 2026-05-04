@@ -37,14 +37,33 @@ export type CreatePaseoAgentOptions = {
   labels?: Record<string, string>;
 };
 
-export type PaseoStreamEvent = {
-  type: string;
-  timestamp?: string;
-  text?: string;
-  toolCall?: { name: string; args?: unknown };
-  reason?: string;
-  error?: string;
-};
+/**
+ * Paseo timeline item types.
+ * @see Paseo packages/server/src/shared/messages.ts AgentTimelineItemPayloadSchema
+ */
+export type PaseoTimelineItem =
+  | { type: "user_message"; text: string; messageId?: string }
+  | { type: "assistant_message"; text: string }
+  | { type: "reasoning"; text: string }
+  | { type: "tool_call"; toolName: string; args?: unknown; toolCallId?: string }
+  | { type: "todo"; items: Array<{ text: string; completed: boolean }> }
+  | { type: "error"; message: string }
+  | { type: "compaction"; status: "loading" | "completed"; trigger?: "auto" | "manual" };
+
+/**
+ * Paseo AgentStreamEvent payload types.
+ * @see Paseo packages/server/src/shared/messages.ts AgentStreamEventPayloadSchema
+ */
+export type PaseoStreamEvent =
+  | { type: "thread_started"; sessionId?: string; provider?: string }
+  | { type: "turn_started"; provider?: string }
+  | { type: "turn_completed"; provider?: string }
+  | { type: "turn_failed"; error: string; code?: string; provider?: string }
+  | { type: "turn_canceled"; reason: string; provider?: string }
+  | { type: "timeline"; item: PaseoTimelineItem; provider?: string; seq?: number; epoch?: string }
+  | { type: "permission_requested"; provider?: string }
+  | { type: "permission_resolved"; requestId: string; provider?: string }
+  | { type: "attention_required"; reason: string; timestamp?: string; provider?: string };
 
 export type PaseoAgentSnapshot = {
   id: string;

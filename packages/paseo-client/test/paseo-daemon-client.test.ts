@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { createServer, type Server } from "http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { PaseoDaemonClient } from "../src/paseo-daemon-client.js";
+import type { PaseoStreamEvent } from "../src/types.js";
 
 function createMockPaseoDaemon(port: number): Promise<{ server: Server; wss: WebSocketServer; close: () => Promise<void> }> {
   return new Promise((resolve) => {
@@ -41,7 +42,7 @@ function createMockPaseoDaemon(port: number): Promise<{ server: Server; wss: Web
                   agent: {
                     id: "test-agent-" + inner.requestId.slice(0, 8),
                     lifecycle: "initializing",
-                    provider: inner.config?.provider ?? "claude-code",
+                    provider: inner.config?.provider ?? "claude",
                     cwd: inner.config?.cwd ?? "/test",
                     title: "Test Agent",
                   },
@@ -59,7 +60,7 @@ function createMockPaseoDaemon(port: number): Promise<{ server: Server; wss: Web
                     agent: {
                       id: "test-agent-" + inner.requestId.slice(0, 8),
                       lifecycle: "running",
-                      provider: "claude-code",
+                      provider: "claude",
                       cwd: "/test",
                     },
                   },
@@ -67,16 +68,16 @@ function createMockPaseoDaemon(port: number): Promise<{ server: Server; wss: Web
               }));
 
               setTimeout(() => {
-                ws.send(JSON.stringify({
-                  type: "session",
-                  message: {
-                    type: "agent_stream",
-                    payload: {
-                      agentId: "test-agent-" + inner.requestId.slice(0, 8),
-                      event: { type: "text_delta", text: "PASEO_OK" },
-                    },
+              ws.send(JSON.stringify({
+                type: "session",
+                message: {
+                  type: "agent_stream",
+                  payload: {
+                    agentId: "test-agent-" + inner.requestId.slice(0, 8),
+                    event: { type: "timeline", item: { type: "assistant_message", text: "PASEO_OK" } },
                   },
-                }));
+                },
+              }));
 
                 ws.send(JSON.stringify({
                   type: "session",
@@ -87,7 +88,7 @@ function createMockPaseoDaemon(port: number): Promise<{ server: Server; wss: Web
                       agent: {
                         id: "test-agent-" + inner.requestId.slice(0, 8),
                         lifecycle: "idle",
-                        provider: "claude-code",
+                        provider: "claude",
                         cwd: "/test",
                       },
                     },
@@ -179,24 +180,31 @@ describe("PaseoDaemonClient integration", () => {
 
     await client.connect();
 
-    const streamEvents: Array<{ agentId: string; text?: string }> = [];
+    const streamEvents: Array<{ agentId: string; event: PaseoStreamEvent }> = [];
     client.onStreamEvent((agentId, event) => {
-      streamEvents.push({ agentId, text: event.text });
+      streamEvents.push({ agentId, event });
     });
 
     const handle = await client.createAgent({
-      provider: "claude-code",
+      provider: "claude",
       cwd: "/test",
       initialPrompt: "Hello",
     });
 
     expect(handle.paseoAgentId).toBeTruthy();
-    expect(handle.snapshot.provider).toBe("claude-code");
+    expect(handle.snapshot.provider).toBe("claude");
 
     await new Promise((r) => setTimeout(r, 200));
 
     expect(streamEvents.length).toBeGreaterThan(0);
-    expect(streamEvents.some((e) => e.text === "PASEO_OK")).toBe(true);
+    const hasAssistantMessage = streamEvents.some((e) => {
+      if (e.event.type === "timeline") {
+        const item = e.event.item as { type?: string; text?: string };
+        return item.type === "assistant_message" && item.text === "PASEO_OK";
+      }
+      return false;
+    });
+    expect(hasAssistantMessage).toBe(true);
 
     await client.deleteAgent(handle.paseoAgentId);
     await client.disconnect();
@@ -210,7 +218,7 @@ describe("PaseoDaemonClient integration", () => {
 
     await client.connect();
     const handle = await client.createAgent({
-      provider: "claude-code",
+      provider: "claude",
       cwd: "/test",
     });
 
@@ -233,7 +241,7 @@ describe("PaseoDaemonClient integration", () => {
 
     await client.connect();
     const handle = await client.createAgent({
-      provider: "claude-code",
+      provider: "claude",
       cwd: "/test",
     });
 

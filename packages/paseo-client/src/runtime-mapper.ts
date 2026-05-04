@@ -3,7 +3,7 @@ import type { RuntimeId } from "@crewden/shared";
 export function mapRuntimeToProvider(runtime: RuntimeId): string {
   switch (runtime) {
     case "claude":
-      return "claude-code";
+      return "claude";
     case "codex":
       return "codex";
     case "gemini":

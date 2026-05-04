@@ -412,11 +412,7 @@ export class PaseoDaemonClient {
         resolve: (value: unknown) => resolve(value as T),
         reject,
         timeoutHandle,
-        // Store predicate for matching
-        ...(process.env.NODE_ENV === "test" ? {} : {}),
       });
-
-      // Check already-buffered messages (no-op for now, messages arrive async)
     });
   }
 
@@ -428,12 +424,9 @@ export class PaseoDaemonClient {
     const pending = this.pendingRequests.get(requestId);
     if (!pending) return;
 
-    // We don't have the predicate here, so we use a simpler approach:
-    // resolve anything that matches the requestId
     clearTimeout(pending.timeoutHandle);
     this.pendingRequests.delete(requestId);
 
-    // For create_agent, we need special handling
     if (msg.type === "status" && payload?.agent && payload?.requestId === requestId) {
       pending.resolve({ kind: "created", agent: payload.agent });
     } else if (msg.type === "status" && payload?.status === "agent_create_failed" && payload?.requestId === requestId) {
@@ -554,13 +547,39 @@ export class PaseoDaemonClient {
     const type = raw.type as string;
     if (!type) return null;
 
-    return {
-      type,
-      timestamp: raw.timestamp as string | undefined,
-      text: raw.text as string | undefined,
-      toolCall: raw.toolCall as { name: string; args?: unknown } | undefined,
-      reason: raw.reason as string | undefined,
-      error: raw.error as string | undefined,
-    };
+    switch (type) {
+      case "timeline": {
+        const rawItem = raw.item as Record<string, unknown> | undefined;
+        if (!rawItem) return { type: "timeline", item: { type: "error", message: "missing item" } };
+        const itemType = rawItem.type as string;
+        switch (itemType) {
+          case "assistant_message":
+          case "user_message":
+          case "reasoning":
+            return { type: "timeline", item: { type: itemType, text: (rawItem.text as string) ?? "" } };
+          case "tool_call":
+            return {
+              type: "timeline",
+              item: { type: "tool_call", toolName: (rawItem.name as string) ?? "", args: rawItem.args },
+            };
+          case "error":
+            return { type: "timeline", item: { type: "error", message: (rawItem.message as string) ?? "" } };
+          default:
+            return { type: "timeline", item: { type: itemType } as unknown as import("./types.js").PaseoTimelineItem };
+        }
+      }
+      case "turn_started":
+        return { type: "turn_started" };
+      case "turn_completed":
+        return { type: "turn_completed" };
+      case "turn_failed":
+        return { type: "turn_failed", error: (raw.error as string) ?? "unknown error" };
+      case "turn_canceled":
+        return { type: "turn_canceled", reason: (raw.reason as string) ?? "canceled" };
+      case "thread_started":
+        return { type: "thread_started", sessionId: raw.sessionId as string | undefined };
+      default:
+        return null;
+    }
   }
 }

@@ -6,7 +6,7 @@
  *
  * Prerequisites:
  *   1. Paseo Daemon running locally (npm run dev in paseo repo)
- *   2. At least one provider available (claude-code, codex, or opencode)
+ *   2. At least one provider available (claude, codex, or opencode)
  *
  * This script:
  *   1. Connects to Paseo Daemon via WebSocket
@@ -69,7 +69,7 @@ async function main(): Promise<void> {
     // Step 2: Create agent
     console.log("--- Step 2: Creating agent ---");
     const handle = await client.createAgent({
-      provider: "claude-code",
+      provider: "claude",
       cwd: TEST_CWD,
       systemPrompt: "You are a test agent. Reply concisely.",
       initialPrompt: "Hello, reply with exactly: PASEO_OK",
