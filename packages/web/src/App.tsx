@@ -553,6 +553,7 @@ export function App() {
         agents={agents}
         activitiesByAgent={activitiesByAgent}
         machines={machines}
+        runtimeStatus={runtimeStatus}
         selectedView={selectedView}
         selectedChannel={selectedChannel}
         selectedAgentId={selectedAgentId}

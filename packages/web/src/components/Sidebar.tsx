@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Channel, Agent, AgentActivity, Machine, VersionInfo } from '../api.js';
+import type { Channel, Agent, AgentActivity, Machine, RuntimeStatus, VersionInfo } from '../api.js';
 import { PresenceAvatar, presenceLabel } from './PresenceAvatar.js';
 import { t } from '../i18n.js';
 
@@ -8,6 +8,7 @@ type Props = {
   agents: Agent[];
   activitiesByAgent?: Record<string, AgentActivity[]>;
   machines: Machine[];
+  runtimeStatus?: RuntimeStatus;
   selectedView: 'channel' | 'tasks' | 'knowledge';
   selectedChannel: string;
   selectedAgentId?: string;
@@ -61,7 +62,7 @@ const S = {
   },
 };
 
-export function Sidebar({ channels, agents, activitiesByAgent = {}, machines, selectedView, selectedChannel, selectedAgentId, webVersion, hubVersion, taskCount, onSelectTasks, onSelectKnowledge, onOpenSearch, onSelectChannel, onCreateChannel, onDeleteChannel, onSelectAgent, onOpenAgents, className, onNavigate, onSignOut }: Props) {
+export function Sidebar({ channels, agents, activitiesByAgent = {}, machines, runtimeStatus, selectedView, selectedChannel, selectedAgentId, webVersion, hubVersion, taskCount, onSelectTasks, onSelectKnowledge, onOpenSearch, onSelectChannel, onCreateChannel, onDeleteChannel, onSelectAgent, onOpenAgents, className, onNavigate, onSignOut }: Props) {
   const [creating, setCreating] = useState(false);
   const [channelName, setChannelName] = useState('');
   const [channelError, setChannelError] = useState('');
@@ -235,7 +236,13 @@ export function Sidebar({ channels, agents, activitiesByAgent = {}, machines, se
         })}
 
         <SectionHeader label={t('nav.machines')} count={machines.length} style={{ marginTop: 8 }} />
-        {machines.length === 0 && <EmptyHint text="no daemon connected" />}
+        {machines.length === 0 ? (
+          runtimeStatus?.mode === 'paseo-daemon' && runtimeStatus.connected ? (
+            <EmptyHint text="Paseo Daemon Connected" />
+          ) : (
+            <EmptyHint text="no daemon connected" />
+          )
+        ) : null}
         {machines.map((m) => (
           <div key={m.id} style={{
             display: 'flex',
