@@ -3,4 +3,5 @@ dist/
 .env
 *.log
 .logs/
+.state/
 .DS_Store
