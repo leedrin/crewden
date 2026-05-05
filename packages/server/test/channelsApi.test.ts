@@ -30,7 +30,7 @@ describe('channel API', () => {
     const app = await buildApp();
     const channel = (await app.inject({ method: 'POST', url: '/api/channels', payload: { name: 'ops' } })).json();
     await getStore().createMessage({ id: 'msg-1', channelId: channel.id, senderName: 'user', content: 'delete me' });
-    await getStore().createTask({ id: 'task-1', channelId: channel.id, title: 'delete task', status: 'todo', creatorName: 'user' });
+    await getStore().createTask({ id: 'task-1', channelId: channel.id, title: 'delete task', status: 'backlog', creatorName: 'user' });
 
     const deleted = await app.inject({ method: 'DELETE', url: `/api/channels/${channel.id}` });
     expect(deleted.statusCode).toBe(204);

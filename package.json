@@ -1,7 +1,7 @@
 {
   "name": "crewden",
   "private": true,
-  "version": "1.5.1",
+  "version": "2.0.0",
   "scripts": {
     "start": "bash start.sh",
     "dev": "pnpm --parallel --filter @crewden/server --filter @crewden/web dev",

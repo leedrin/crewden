@@ -9,7 +9,7 @@
     "head_sampling_rate": 1
   },
   "vars": {
-    "CREWDEN_VERSION": "1.5.1"
+    "CREWDEN_VERSION": "2.0.0"
   },
   "durable_objects": {
     "bindings": [

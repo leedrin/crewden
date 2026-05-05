@@ -46,7 +46,24 @@ export type AgentDelegation = {
   createdAt: string;
 };
 
-export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'blocked' | 'cancelled';
+export type ActorType = 'human' | 'agent' | 'system';
+export type Actor = {
+  actorType: ActorType;
+  actorId: string;
+};
+
+export type TaskStatus =
+  | 'backlog'
+  | 'spec_needed'
+  | 'ready'
+  | 'assigned'
+  | 'in_progress'
+  | 'in_review'
+  | 'changes_requested'
+  | 'qa'
+  | 'done'
+  | 'cancelled';
+export type TaskType = 'feature' | 'bug' | 'chore' | 'research' | 'docs';
 export type GoalBriefStatus = 'draft' | 'confirmed' | 'cancelled' | 'completed';
 export type GoalAlignmentStatus = 'needs_clarification' | 'awaiting_confirmation' | 'confirmed' | 'cancelled';
 export type GoalAlignmentRiskLevel = 'low' | 'medium' | 'high';
@@ -210,12 +227,35 @@ export type Task = {
   messageId?: string;
   title: string;
   status: TaskStatus;
+  type: TaskType;
   creatorName: string;
+  creator: Actor;
   assigneeId?: string;
+  owner?: Actor;
+  reviewer?: Actor;
+  acceptanceCriteria?: string[];
+  definitionOfDone?: string[];
+  constraints?: string[];
+  dependsOn?: string[];
+  isBlocked: boolean;
+  blockedReason?: string;
+  sourceChannelId?: string;
+  sourceThreadId?: string;
   context?: TaskContext;
   version: number;
   createdAt: string;
   updatedAt: string;
+};
+
+export type AuditLogEntry = {
+  id: string;
+  actorType: ActorType;
+  actorId: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  detail?: Record<string, unknown>;
+  createdAt: string;
 };
 
 export type ReminderStatus = 'pending' | 'triggered' | 'cancelled';
@@ -326,6 +366,8 @@ export type Message = {
   id: string;
   channelId: string;
   agentId?: string;
+  actorType: ActorType;
+  actorId: string;
   senderName: string;
   content: string;
   threadRootId?: string;

@@ -254,9 +254,13 @@ export async function internalAgentRoutes(app: FastifyInstance) {
       channelId: channel.id,
       messageId: normalizedMessageId,
       title: parsed.data.title,
-      status: 'todo',
+      status: parsed.data.status,
+      type: parsed.data.type,
       creatorName: parsed.data.creatorName,
+      creator: { actorType: 'agent', actorId: agent.id },
       assigneeId: parsed.data.assigneeId,
+      owner: parsed.data.assigneeId ? { actorType: 'agent', actorId: parsed.data.assigneeId } : undefined,
+      isBlocked: false,
       context: parsed.data.context,
     });
     eventBus.emit({ type: 'task:update', task });
@@ -389,9 +393,16 @@ export async function internalAgentRoutes(app: FastifyInstance) {
         channelId: goal.channelId,
         messageId: goal.sourceMessageId,
         title: draft.title,
-        status: 'todo',
+        status: 'backlog',
         creatorName: parsed.data.creatorName,
+        creator: { actorType: 'agent', actorId: agent.id },
         assigneeId: draft.assigneeId,
+        owner: draft.assigneeId ? { actorType: 'agent', actorId: draft.assigneeId } : undefined,
+        type: 'feature',
+        acceptanceCriteria: draft.acceptanceCriteria.length > 0 ? draft.acceptanceCriteria : goal.successCriteria,
+        dependsOn: draft.dependencies,
+        isBlocked: false,
+        sourceChannelId: goal.channelId,
         context: {
           goalId: goal.id,
           goalObjective: goal.objective,
@@ -521,9 +532,18 @@ export async function internalAgentRoutes(app: FastifyInstance) {
         channelId: alignment.channelId,
         messageId: alignment.sourceMessageId,
         title: draft.title,
-        status: 'todo',
+        status: 'backlog',
         creatorName: parsed.data.requesterName,
+        creator: { actorType: 'agent', actorId: agent.id },
         assigneeId: draft.assigneeId,
+        owner: draft.assigneeId ? { actorType: 'agent', actorId: draft.assigneeId } : undefined,
+        type: 'feature',
+        acceptanceCriteria: (draft.acceptanceCriteria?.length ?? 0) > 0 ? draft.acceptanceCriteria : alignment.successCriteria,
+        constraints: alignment.constraints,
+        dependsOn: draft.dependencies,
+        isBlocked: false,
+        sourceChannelId: alignment.channelId,
+        sourceThreadId: alignment.threadRootId,
         context: {
           goalId: goal.id,
           goalObjective: goal.objective,
@@ -653,7 +673,8 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     const shouldAcknowledge = !existing.assigneeId;
     const task = await store.updateTask(existing.id, {
       assigneeId: agent.id,
-      status: existing.status === 'todo' ? 'in_progress' : existing.status,
+      owner: { actorType: 'agent', actorId: agent.id },
+      status: existing.status === 'backlog' || existing.status === 'ready' ? 'assigned' : existing.status,
       context: appendProgress(existing, agent.id, 'claimed', `Claimed by ${agent.displayName ?? agent.name}`),
     });
     if (!task) return reply.status(404).send({ error: 'Task not found' });
@@ -700,7 +721,8 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
     const context = appendProgress(existing, agent.id, 'blocked', `${parsed.data.reason}; needs: ${parsed.data.needs}`);
     const task = await store.updateTask(existing.id, {
-      status: 'blocked',
+      isBlocked: true,
+      blockedReason: parsed.data.reason,
       context: { ...context, blockedReason: parsed.data.reason, blockedNeeds: parsed.data.needs },
     });
     if (!task) return reply.status(404).send({ error: 'Task not found' });

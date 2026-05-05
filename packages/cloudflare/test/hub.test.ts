@@ -158,7 +158,7 @@ describe('agent internal API', () => {
     const taskCreated = await SELF.fetch('https://hub.test/api/tasks', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ channelId: 'general', title: `internal task ${crypto.randomUUID()}`, creatorName: 'user', assigneeId: agent.id, context: { goal: 'cloudflare internal task' } }),
+      body: JSON.stringify({ channelId: 'general', title: `internal task ${crypto.randomUUID()}`, creatorName: 'user', assigneeId: agent.id, status: 'assigned', context: { goal: 'cloudflare internal task' } }),
     });
     expect(taskCreated.status).toBe(201);
     const task = (await taskCreated.json()) as { id: string; title: string };
@@ -476,8 +476,22 @@ describe('input validation', () => {
     expect(created.status).toBe(201);
     const task = (await created.json()) as { id: string; title: string; status: string };
     expect(task.title).toBe(title);
-    expect(task.status).toBe('todo');
+    expect(task.status).toBe('backlog');
     expect((task as any).context.goal).toBe('cloudflare task board');
+
+    const ready = await SELF.fetch(`https://hub.test/api/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status: 'ready' }),
+    });
+    expect(ready.status).toBe(200);
+
+    const assigned = await SELF.fetch(`https://hub.test/api/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status: 'assigned' }),
+    });
+    expect(assigned.status).toBe(200);
 
     const started = await SELF.fetch(`https://hub.test/api/tasks/${task.id}`, {
       method: 'PATCH',

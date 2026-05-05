@@ -341,10 +341,10 @@ export function App() {
             return [...prev, msg.task];
           });
           const taskStatus: string = msg.task.status;
-          if (taskStatus === 'done' || taskStatus === 'blocked' || taskStatus === 'in_review') {
-            const statusLabel: Record<string, string> = { done: 'Done', blocked: 'Blocked', in_review: 'Needs review' };
+          if (taskStatus === 'done' || msg.task.isBlocked || taskStatus === 'in_review' || taskStatus === 'changes_requested' || taskStatus === 'qa') {
+            const statusLabel: Record<string, string> = { done: 'Done', in_review: 'Needs review', changes_requested: 'Changes requested', qa: 'QA', blocked: 'Blocked' };
             notifyBrowser(
-              `Task ${statusLabel[taskStatus] ?? taskStatus}`,
+              `Task ${msg.task.isBlocked ? statusLabel.blocked : statusLabel[taskStatus] ?? taskStatus}`,
               { body: msg.task.title?.slice(0, 80), tag: `task:${msg.task.id}:${taskStatus}` },
               'tasks',
             );
@@ -540,7 +540,7 @@ export function App() {
     <div className="app-shell" style={{ display: 'flex', height: '100vh', fontFamily: "'Courier New', monospace", background: '#fafaf5' }}>
       <MobileTopBar
         title={currentTitle}
-        subtitle={thread ? 'Thread' : selectedView === 'tasks' ? `${tasks.filter((task) => task.status !== 'done').length} open` : selectedView === 'knowledge' ? 'Memory layer' : 'Workspace'}
+        subtitle={thread ? 'Thread' : selectedView === 'tasks' ? `${tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled').length} open` : selectedView === 'knowledge' ? 'Memory layer' : 'Workspace'}
         hasThread={!!thread}
         onOpenMenu={() => setSidebarOpen(true)}
         onOpenAgents={() => { setRightPanel('agents'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
@@ -559,7 +559,7 @@ export function App() {
         selectedAgentId={selectedAgentId}
         webVersion={{ component: 'web', version: WEB_VERSION, commit: WEB_COMMIT_SHA || undefined }}
         hubVersion={hubVersion}
-        taskCount={tasks.filter((task) => task.status !== 'done').length}
+        taskCount={tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled').length}
         onSelectTasks={() => { setSelectedView('tasks'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
         onSelectKnowledge={() => { setSelectedView('knowledge'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
         onOpenSearch={() => setSearchOpen(true)}

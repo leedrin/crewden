@@ -1,12 +1,14 @@
 import { getEffectiveAuthToken } from './auth.js';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '');
-export const WEB_VERSION = (import.meta.env.VITE_APP_VERSION ?? '1.5.1').trim();
+export const WEB_VERSION = (import.meta.env.VITE_APP_VERSION ?? '2.0.0').trim();
 export const WEB_COMMIT_SHA = (import.meta.env.VITE_COMMIT_SHA ?? '').trim();
 
 export type Channel = { id: string; name: string; createdAt: string };
 export type Mention = { type: 'agent' | 'user'; id: string; label: string };
-export type Message = { id: string; channelId: string; senderName: string; content: string; agentId?: string; threadRootId?: string; replyCount?: number; latestReplyAt?: string; mentions?: Mention[]; createdAt: string };
+export type ActorType = 'human' | 'agent' | 'system';
+export type Actor = { actorType: ActorType; actorId: string };
+export type Message = { id: string; channelId: string; senderName: string; content: string; actorType: ActorType; actorId: string; agentId?: string; threadRootId?: string; replyCount?: number; latestReplyAt?: string; mentions?: Mention[]; createdAt: string };
 export type MessageThread = { root: Message; replies: Message[] };
 export type SearchMessageResult = Message & { channelName: string };
 export type AgentOrganization = { department?: string; roles?: string[]; capabilities?: string[]; responsibilities?: string[]; managerId?: string; backupAgentIds?: string[]; availability?: 'available' | 'unavailable' | 'overloaded' };
@@ -55,14 +57,39 @@ export type RuntimeStatus = {
   }>;
 };
 export type VersionInfo = { component: string; version: string; commit?: string; build?: string };
-export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'blocked' | 'cancelled';
+export type TaskStatus = 'backlog' | 'spec_needed' | 'ready' | 'assigned' | 'in_progress' | 'in_review' | 'changes_requested' | 'qa' | 'done' | 'cancelled';
+export type TaskType = 'feature' | 'bug' | 'ops' | 'research' | 'review' | 'handoff';
 export type GoalBriefStatus = 'draft' | 'confirmed' | 'cancelled' | 'completed';
 export type GoalAlignmentStatus = 'needs_clarification' | 'awaiting_confirmation' | 'confirmed' | 'cancelled';
 export type GoalAlignmentRiskLevel = 'low' | 'medium' | 'high';
 export type TaskProgressEvent = { id: string; taskId: string; agentId: string; type: 'claimed' | 'started' | 'heartbeat' | 'blocked' | 'handoff' | 'completed' | 'escalated'; detail: string; createdAt: string };
 export type TaskReview = { id: string; taskId: string; requesterAgentId?: string; reviewerAgentId?: string; status: 'requested' | 'changes_requested' | 'approved' | 'cancelled'; evidence: string[]; checklist: Array<{ label: string; checked: boolean }>; comment?: string; createdAt: string; updatedAt: string };
 export type TaskContext = { goalId?: string; goalObjective?: string; goal?: string; background?: string; acceptanceCriteria?: string[]; constraints?: string[]; assumptions?: string[]; risks?: string[]; dependencies?: string[]; blockedByTaskIds?: string[]; sourceMessageIds?: string[]; artifacts?: string[]; requesterAgentId?: string; previousAgentId?: string; handoffNotes?: string[]; privateNotes?: string[]; claimedByAgentId?: string; blockedReason?: string; blockedNeeds?: string; escalatedReason?: string; progressEvents?: TaskProgressEvent[]; reviewerAgentId?: string; evidence?: string[]; acceptanceChecklist?: string[]; reviewIds?: string[]; reviewNotes?: string[]; reviews?: TaskReview[] };
-export type Task = { id: string; channelId: string; messageId?: string; title: string; status: TaskStatus; creatorName: string; assigneeId?: string; context?: TaskContext; version: number; createdAt: string; updatedAt: string };
+export type Task = {
+  id: string;
+  channelId: string;
+  messageId?: string;
+  title: string;
+  status: TaskStatus;
+  type: TaskType;
+  creatorName: string;
+  creator: Actor;
+  assigneeId?: string;
+  owner?: Actor;
+  reviewer?: Actor;
+  acceptanceCriteria?: string[];
+  definitionOfDone?: string[];
+  constraints?: string[];
+  dependsOn?: string[];
+  isBlocked: boolean;
+  blockedReason?: string;
+  sourceChannelId?: string;
+  sourceThreadId?: string;
+  context?: TaskContext;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
 export type GoalBrief = { id: string; channelId: string; sourceMessageId?: string; requesterName: string; objective: string; background: string[]; successCriteria: string[]; constraints: string[]; assumptions: string[]; risks: string[]; status: GoalBriefStatus; createdAt: string; updatedAt: string };
 export type GoalAlignmentTaskDraft = { title: string; assigneeId?: string; dependencies?: string[]; acceptanceCriteria?: string[]; artifacts?: string[]; role?: 'owner' | 'reviewer' | 'support' };
 export type GoalAlignment = { id: string; channelId: string; threadRootId: string; sourceMessageId: string; goalId?: string; status: GoalAlignmentStatus; objective: string; questions: string[]; answers: string[]; successCriteria: string[]; constraints: string[]; planSummary?: string; taskDrafts: GoalAlignmentTaskDraft[]; recommendedAgentIds: string[]; reviewerAgentIds: string[]; recommendationReasons: Record<string, string>; gaps: string[]; riskLevel: GoalAlignmentRiskLevel; createdAt: string; updatedAt: string };
@@ -311,7 +338,7 @@ export async function getTasks(filter: { channelId?: string; status?: TaskStatus
   return r.json();
 }
 
-export async function createTask(data: { channelId?: string; title: string; assigneeId?: string; creatorName?: string }): Promise<Task> {
+export async function createTask(data: { channelId?: string; title: string; assigneeId?: string; creatorName?: string; status?: TaskStatus; type?: TaskType; acceptanceCriteria?: string[]; definitionOfDone?: string[]; constraints?: string[]; dependsOn?: string[] }): Promise<Task> {
   const r = await apiFetch(`${API_BASE}/api/tasks`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -320,7 +347,7 @@ export async function createTask(data: { channelId?: string; title: string; assi
   return r.json();
 }
 
-export async function patchTask(taskId: string, data: { status?: TaskStatus; assigneeId?: string; expectedVersion?: number }): Promise<Task> {
+export async function patchTask(taskId: string, data: { status?: TaskStatus; assigneeId?: string; expectedVersion?: number; isBlocked?: boolean; blockedReason?: string; dependsOn?: string[] }): Promise<Task> {
   const r = await apiFetch(`${API_BASE}/api/tasks/${taskId}`, {
     method: 'PATCH',
     headers: authHeaders({ 'Content-Type': 'application/json' }),

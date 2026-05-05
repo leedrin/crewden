@@ -95,7 +95,7 @@ export async function buildOpenTaskSummary(agent: Agent): Promise<string | undef
   return [
     ...sections,
     '',
-    'Use `crewden task read <taskId> --context`, `crewden task claim <taskId>`, `crewden task update <taskId> --status in_progress|in_review|done|blocked|cancelled`, and `crewden task handoff <taskId> --to agentName --notes "..."` to manage them.',
+    'Use `crewden task read <taskId> --context`, `crewden task claim <taskId>`, `crewden task update <taskId> --status assigned|in_progress|in_review|changes_requested|qa|done|cancelled`, `crewden task block <taskId> --reason "..." --needs "..."`, and `crewden task handoff <taskId> --to agentName --notes "..."` to manage them.',
   ].join('\n');
 }
 
@@ -119,7 +119,7 @@ export function toTaskDelivery(task: Task) {
       task.context?.background ? `Background: ${task.context.background}` : undefined,
       task.context?.handoffNotes?.length ? `Latest handoff: ${task.context.handoffNotes.at(-1)}` : undefined,
       '',
-      'Use `crewden task read <taskId> --context` for details and `crewden task update <taskId> --status in_progress|in_review|done|blocked|cancelled` when you make progress.',
+      'Use `crewden task read <taskId> --context` for details, `crewden task update <taskId> --status assigned|in_progress|in_review|changes_requested|qa|done|cancelled` when you make progress, and `crewden task block <taskId> --reason "..." --needs "..."` when blocked.',
     ].filter(Boolean).join('\n'),
     createdAt: task.updatedAt,
   };

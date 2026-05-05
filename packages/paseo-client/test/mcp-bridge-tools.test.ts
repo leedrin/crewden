@@ -6,11 +6,12 @@ describe("mcp-bridge tools", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers 22 crewden tools", () => {
+  it("registers 23 crewden tools", () => {
     const tools = createToolDefinitions();
-    expect(tools).toHaveLength(22);
+    expect(tools).toHaveLength(23);
     expect(tools.map((tool) => tool.name)).toContain("crewden_send_message");
     expect(tools.map((tool) => tool.name)).toContain("crewden_create_task");
+    expect(tools.map((tool) => tool.name)).toContain("crewden_block_task");
     expect(tools.map((tool) => tool.name)).toContain("crewden_invite_agent");
     expect(tools.map((tool) => tool.name)).toContain("crewden_set_reminder");
     expect(tools.map((tool) => tool.name)).toContain("crewden_search_knowledge");

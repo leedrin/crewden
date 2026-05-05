@@ -30,6 +30,7 @@ import type {
   TaskStatus,
   WorkspaceEntry,
   WorkspaceError,
+  ActorType,
 } from '@crewden/shared';
 import {
   createVersionInfo,
@@ -86,6 +87,22 @@ type SocketAttachment =
   | { kind: 'daemon'; machineId: string };
 
 type Row = Record<string, string | null>;
+type NewMessage = Omit<Message, 'createdAt' | 'actorType' | 'actorId'> & Partial<Pick<Message, 'actorType' | 'actorId'>>;
+type NewTask = Omit<Task, 'createdAt' | 'updatedAt' | 'version' | 'type' | 'creator' | 'owner' | 'reviewer' | 'isBlocked'> &
+  Partial<Pick<Task, 'type' | 'creator' | 'owner' | 'reviewer' | 'isBlocked'>>;
+type TaskPatch = Partial<Pick<Task, 'status' | 'assigneeId' | 'owner' | 'reviewer' | 'acceptanceCriteria' | 'definitionOfDone' | 'constraints' | 'dependsOn' | 'isBlocked' | 'blockedReason' | 'context'>>;
+type AuditLog = {
+  id: string;
+  actorType: ActorType;
+  actorId?: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  taskId?: string;
+  agentId?: string;
+  detailJson: Record<string, unknown>;
+  createdAt: string;
+};
 
 const JSON_HEADERS = {
   'Content-Type': 'application/json',
@@ -563,9 +580,20 @@ export class CrewdenHub extends DurableObject<Env> {
         id: crypto.randomUUID(),
         channelId,
         title: data.title,
-        status: 'todo',
+        status: 'backlog',
         creatorName: agent?.displayName ?? agent?.name ?? data.agentId,
+        creator: { actorType: 'agent', actorId: data.agentId },
         assigneeId: assignee?.id ?? data.assigneeId,
+      });
+      this.appendAuditLog({
+        actorType: 'agent',
+        actorId: data.agentId,
+        action: 'task.created',
+        entityType: 'task',
+        entityId: task.id,
+        taskId: task.id,
+        agentId: data.agentId,
+        detailJson: { status: task.status, type: task.type },
       });
       this.broadcast({ type: 'task:update', task });
       this.notifyTaskAssignee(task);
@@ -651,11 +679,23 @@ export class CrewdenHub extends DurableObject<Env> {
         sender_name TEXT NOT NULL,
         content TEXT NOT NULL,
         agent_id TEXT,
+        actor_type TEXT NOT NULL DEFAULT 'human',
+        actor_id TEXT,
         thread_root_id TEXT,
         mentions TEXT,
         created_at TEXT NOT NULL
       )
     `);
+    try {
+      this.ctx.storage.sql.exec('ALTER TABLE messages ADD COLUMN actor_type TEXT NOT NULL DEFAULT "human"');
+    } catch {
+      // Existing Durable Objects may already have the column.
+    }
+    try {
+      this.ctx.storage.sql.exec('ALTER TABLE messages ADD COLUMN actor_id TEXT');
+    } catch {
+      // Existing Durable Objects may already have the column.
+    }
     try {
       this.ctx.storage.sql.exec('ALTER TABLE messages ADD COLUMN thread_root_id TEXT');
     } catch {
@@ -667,14 +707,43 @@ export class CrewdenHub extends DurableObject<Env> {
       // Existing Durable Objects may already have the column.
     }
     this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id TEXT PRIMARY KEY,
+        actor_type TEXT NOT NULL,
+        actor_id TEXT,
+        action TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        task_id TEXT,
+        agent_id TEXT,
+        detail_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    `);
+    this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
         channel_id TEXT NOT NULL,
         message_id TEXT,
         title TEXT NOT NULL,
         status TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'feature',
         creator_name TEXT NOT NULL,
+        creator_type TEXT NOT NULL DEFAULT 'human',
+        creator_id TEXT,
         assignee_id TEXT,
+        owner_type TEXT,
+        owner_id TEXT,
+        reviewer_type TEXT,
+        reviewer_id TEXT,
+        acceptance_criteria TEXT,
+        definition_of_done TEXT,
+        constraints TEXT,
+        depends_on TEXT,
+        is_blocked INTEGER NOT NULL DEFAULT 0,
+        blocked_reason TEXT,
+        source_channel_id TEXT,
+        source_thread_id TEXT,
         context TEXT,
         version INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
@@ -732,6 +801,33 @@ export class CrewdenHub extends DurableObject<Env> {
     } catch {
       // Existing Durable Objects may already have the column.
     }
+    for (const statement of [
+      'ALTER TABLE tasks ADD COLUMN type TEXT NOT NULL DEFAULT "feature"',
+      'ALTER TABLE tasks ADD COLUMN creator_type TEXT NOT NULL DEFAULT "human"',
+      'ALTER TABLE tasks ADD COLUMN creator_id TEXT',
+      'ALTER TABLE tasks ADD COLUMN owner_type TEXT',
+      'ALTER TABLE tasks ADD COLUMN owner_id TEXT',
+      'ALTER TABLE tasks ADD COLUMN reviewer_type TEXT',
+      'ALTER TABLE tasks ADD COLUMN reviewer_id TEXT',
+      'ALTER TABLE tasks ADD COLUMN acceptance_criteria TEXT',
+      'ALTER TABLE tasks ADD COLUMN definition_of_done TEXT',
+      'ALTER TABLE tasks ADD COLUMN constraints TEXT',
+      'ALTER TABLE tasks ADD COLUMN depends_on TEXT',
+      'ALTER TABLE tasks ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE tasks ADD COLUMN blocked_reason TEXT',
+      'ALTER TABLE tasks ADD COLUMN source_channel_id TEXT',
+      'ALTER TABLE tasks ADD COLUMN source_thread_id TEXT',
+    ]) {
+      try {
+        this.ctx.storage.sql.exec(statement);
+      } catch {
+        // Existing Durable Objects may already have the column.
+      }
+    }
+    this.ctx.storage.sql.exec(`UPDATE tasks SET status = 'backlog' WHERE status = 'todo'`);
+    this.ctx.storage.sql.exec(`UPDATE tasks SET is_blocked = 1, status = 'in_progress' WHERE status = 'blocked'`);
+    this.ctx.storage.sql.exec(`UPDATE messages SET actor_type = 'agent', actor_id = agent_id WHERE agent_id IS NOT NULL AND actor_id IS NULL`);
+    this.ctx.storage.sql.exec(`UPDATE messages SET actor_type = 'human', actor_id = sender_name WHERE actor_id IS NULL`);
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS reminders (
         id TEXT PRIMARY KEY,
@@ -937,10 +1033,31 @@ export class CrewdenHub extends DurableObject<Env> {
       channelId: parsed.data.channelId,
       messageId: parsed.data.messageId,
       title: parsed.data.title,
-      status: 'todo',
+      status: parsed.data.status,
+      type: parsed.data.type,
       creatorName: parsed.data.creatorName,
+      creator: { actorType: parsed.data.creatorType, actorId: parsed.data.creatorId ?? parsed.data.creatorName },
       assigneeId: parsed.data.assigneeId,
+      owner: parsed.data.assigneeId ? { actorType: parsed.data.ownerType ?? 'agent', actorId: parsed.data.ownerId ?? parsed.data.assigneeId } : undefined,
+      reviewer: actorFromPatch(parsed.data.reviewerType, parsed.data.reviewerId),
+      acceptanceCriteria: parsed.data.acceptanceCriteria,
+      definitionOfDone: parsed.data.definitionOfDone,
+      constraints: parsed.data.constraints,
+      dependsOn: parsed.data.dependsOn ?? parsed.data.context?.blockedByTaskIds,
+      isBlocked: parsed.data.isBlocked,
+      blockedReason: parsed.data.blockedReason,
+      sourceChannelId: parsed.data.sourceChannelId ?? parsed.data.channelId,
+      sourceThreadId: parsed.data.sourceThreadId,
       context: parsed.data.context,
+    });
+    this.appendAuditLog({
+      actorType: parsed.data.creatorType,
+      actorId: parsed.data.creatorId ?? parsed.data.creatorName,
+      action: 'task.created',
+      entityType: 'task',
+      entityId: task.id,
+      taskId: task.id,
+      detailJson: { status: task.status, type: task.type },
     });
     this.broadcast({ type: 'task:update', task });
     this.notifyTaskAssignee(task);
@@ -1043,10 +1160,25 @@ export class CrewdenHub extends DurableObject<Env> {
     if (patch.status && !isTaskTransitionAllowed(existing.status, patch.status)) {
       return json({ error: 'Invalid task status transition', from: existing.status, to: patch.status }, 422);
     }
-    const dependencyError = this.validateTaskDependencies(existing.id, patch.context?.blockedByTaskIds);
+    const dependencyError = this.validateTaskDependencies(existing.id, patch.dependsOn ?? patch.context?.blockedByTaskIds);
     if (dependencyError) return json({ error: dependencyError }, 422);
+    if (patch.status === 'in_progress') {
+      const blockersError = this.validateBlockersComplete({ ...existing, ...patch });
+      if (blockersError) return json({ error: blockersError }, 422);
+    }
     const task = this.updateTask(taskId, patch);
     if (!task) return json({ error: 'Task not found' }, 404);
+    if (patch.status && patch.status !== existing.status) {
+      this.appendAuditLog({
+        actorType: existing.creator.actorType,
+        actorId: existing.creator.actorId,
+        action: 'task.status_changed',
+        entityType: 'task',
+        entityId: task.id,
+        taskId: task.id,
+        detailJson: { from: existing.status, to: task.status, expectedVersion },
+      });
+    }
     this.broadcast({ type: 'task:update', task });
     this.notifyTaskAssignee(task);
     if (task.status === 'done' && existing.status !== 'done') this.notifyTasksBlockedBy(task.id);
@@ -1138,9 +1270,15 @@ export class CrewdenHub extends DurableObject<Env> {
       channelId: message.channelId,
       messageId: message.id,
       title: message.content.slice(0, 200),
-      status: 'todo',
+      status: 'backlog',
       creatorName: parsed.data.creatorName,
+      creator: { actorType: parsed.data.creatorType, actorId: parsed.data.creatorId ?? parsed.data.creatorName },
       assigneeId: parsed.data.assigneeId,
+      owner: parsed.data.assigneeId ? { actorType: 'agent', actorId: parsed.data.assigneeId } : undefined,
+      type: 'feature',
+      isBlocked: false,
+      sourceChannelId: message.channelId,
+      sourceThreadId: message.threadRootId,
       context: {
         ...parsed.data.context,
         sourceMessageIds: Array.from(new Set([...(parsed.data.context?.sourceMessageIds ?? []), message.id])),
@@ -1184,9 +1322,17 @@ export class CrewdenHub extends DurableObject<Env> {
         channelId: goal.channelId,
         messageId: goal.sourceMessageId,
         title: draft.title,
-        status: 'todo',
+        status: 'backlog',
         creatorName: parsed.data.creatorName,
         assigneeId: draft.assigneeId,
+        owner: draft.assigneeId ? { actorType: 'agent', actorId: draft.assigneeId } : undefined,
+        type: 'feature',
+        acceptanceCriteria: draft.acceptanceCriteria.length > 0 ? draft.acceptanceCriteria : goal.successCriteria,
+        constraints: goal.constraints,
+        dependsOn: draft.dependencies,
+        isBlocked: false,
+        sourceChannelId: goal.channelId,
+        sourceThreadId: goal.sourceMessageId,
         context: {
           goalId: goal.id,
           goalObjective: goal.objective,
@@ -1334,9 +1480,17 @@ export class CrewdenHub extends DurableObject<Env> {
         channelId: alignment.channelId,
         messageId: alignment.sourceMessageId,
         title: draft.title,
-        status: 'todo',
+        status: 'backlog',
         creatorName: parsed.data.requesterName,
         assigneeId: draft.assigneeId,
+        owner: draft.assigneeId ? { actorType: 'agent', actorId: draft.assigneeId } : undefined,
+        type: 'feature',
+        acceptanceCriteria: (draft.acceptanceCriteria?.length ?? 0) > 0 ? draft.acceptanceCriteria : alignment.successCriteria,
+        constraints: alignment.constraints,
+        dependsOn: draft.dependencies,
+        isBlocked: false,
+        sourceChannelId: alignment.channelId,
+        sourceThreadId: alignment.threadRootId,
         context: {
           goalId: goal.id,
           goalObjective: goal.objective,
@@ -1544,9 +1698,18 @@ export class CrewdenHub extends DurableObject<Env> {
           channelId: goal.channelId,
           messageId: goal.sourceMessageId,
           title: draft.title,
-          status: 'todo',
+          status: 'backlog',
           creatorName: parsed.data.creatorName,
+          creator: { actorType: 'agent', actorId: agent.id },
           assigneeId: draft.assigneeId,
+          owner: draft.assigneeId ? { actorType: 'agent', actorId: draft.assigneeId } : undefined,
+          type: 'feature',
+          acceptanceCriteria: draft.acceptanceCriteria.length > 0 ? draft.acceptanceCriteria : goal.successCriteria,
+          constraints: goal.constraints,
+          dependsOn: draft.dependencies,
+          isBlocked: false,
+          sourceChannelId: goal.channelId,
+          sourceThreadId: goal.sourceMessageId,
           context: {
             goalId: goal.id,
             goalObjective: goal.objective,
@@ -1670,6 +1833,18 @@ export class CrewdenHub extends DurableObject<Env> {
       }
       const task = this.updateTask(existing.id, parsed.data);
       if (!task) return json({ error: 'Task not found' }, 404);
+      if (parsed.data.status && parsed.data.status !== existing.status) {
+        this.appendAuditLog({
+          actorType: 'agent',
+          actorId: agent.id,
+          action: 'task.status_changed',
+          entityType: 'task',
+          entityId: task.id,
+          taskId: task.id,
+          agentId: agent.id,
+          detailJson: { from: existing.status, to: task.status },
+        });
+      }
       this.broadcast({ type: 'task:update', task });
       return json(task);
     }
@@ -1682,10 +1857,23 @@ export class CrewdenHub extends DurableObject<Env> {
       const shouldAcknowledge = !existing.assigneeId;
       const task = this.updateTask(existing.id, {
         assigneeId: agent.id,
-        status: existing.status === 'todo' ? 'in_progress' : existing.status,
+        owner: { actorType: 'agent', actorId: agent.id },
+        status: existing.status === 'backlog' || existing.status === 'ready' ? 'assigned' : existing.status,
         context: appendProgress(existing, agent.id, 'claimed', `Claimed by ${agent.displayName ?? agent.name}`),
       });
       if (!task) return json({ error: 'Task not found' }, 404);
+      if (task.status !== existing.status) {
+        this.appendAuditLog({
+          actorType: 'agent',
+          actorId: agent.id,
+          action: 'task.status_changed',
+          entityType: 'task',
+          entityId: task.id,
+          taskId: task.id,
+          agentId: agent.id,
+          detailJson: { from: existing.status, to: task.status, reason: 'claim' },
+        });
+      }
       this.broadcast({ type: 'task:update', task });
       if (shouldAcknowledge) this.createTaskClaimAcknowledgement(task, agent);
       return json(task);
@@ -1712,7 +1900,11 @@ export class CrewdenHub extends DurableObject<Env> {
       const parsed = InternalTaskBlockRequestSchema.safeParse(await request.json());
       if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
       const context = appendProgress(existing, agent.id, 'blocked', `${parsed.data.reason}; needs: ${parsed.data.needs}`);
-      const task = this.updateTask(existing.id, { status: 'blocked', context: { ...context, blockedReason: parsed.data.reason, blockedNeeds: parsed.data.needs } });
+      const task = this.updateTask(existing.id, {
+        isBlocked: true,
+        blockedReason: parsed.data.reason,
+        context: { ...context, blockedReason: parsed.data.reason, blockedNeeds: parsed.data.needs },
+      });
       if (!task) return json({ error: 'Task not found' }, 404);
       this.broadcast({ type: 'task:update', task });
       return json(task);
@@ -2238,16 +2430,23 @@ export class CrewdenHub extends DurableObject<Env> {
     return row ? toKnowledgeEntry(row) : undefined;
   }
 
-  private createMessage(message: Omit<Message, 'createdAt'>): Message {
-    const created: Message = { ...message, createdAt: new Date().toISOString() };
+  private createMessage(message: NewMessage): Message {
+    const created: Message = {
+      ...message,
+      actorType: message.actorType ?? (message.agentId ? 'agent' : 'human'),
+      actorId: message.actorId ?? message.agentId ?? message.senderName,
+      createdAt: new Date().toISOString(),
+    };
     this.ctx.storage.sql.exec(
-      `INSERT INTO messages (id, channel_id, sender_name, content, agent_id, thread_root_id, mentions, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (id, channel_id, sender_name, content, agent_id, actor_type, actor_id, thread_root_id, mentions, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       created.id,
       created.channelId,
       created.senderName,
       created.content,
       created.agentId ?? null,
+      created.actorType,
+      created.actorId,
       created.threadRootId ?? null,
       created.mentions ? JSON.stringify(created.mentions) : null,
       created.createdAt
@@ -2288,19 +2487,47 @@ export class CrewdenHub extends DurableObject<Env> {
     return mentions.size ? [...mentions.values()] : undefined;
   }
 
-  private createTask(task: Omit<Task, 'createdAt' | 'updatedAt' | 'version'>): Task {
+  private createTask(task: NewTask): Task {
     const now = new Date().toISOString();
-    const created: Task = { ...task, title: task.title.slice(0, 200), version: 1, createdAt: now, updatedAt: now };
+    const owner = task.owner ?? (task.assigneeId ? { actorType: 'agent' as const, actorId: task.assigneeId } : undefined);
+    const created: Task = {
+      ...task,
+      title: task.title.slice(0, 200),
+      status: normalizeTaskStatus(task.status),
+      type: task.type ?? 'feature',
+      creator: task.creator ?? { actorType: 'human', actorId: task.creatorName },
+      owner,
+      assigneeId: task.assigneeId ?? (owner?.actorType === 'agent' ? owner.actorId : undefined),
+      isBlocked: task.isBlocked ?? false,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
     this.ctx.storage.sql.exec(
-      `INSERT INTO tasks (id, channel_id, message_id, title, status, creator_name, assignee_id, context, version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (id, channel_id, message_id, title, status, type, creator_name, creator_type, creator_id, assignee_id, owner_type, owner_id, reviewer_type, reviewer_id, acceptance_criteria, definition_of_done, constraints, depends_on, is_blocked, blocked_reason, source_channel_id, source_thread_id, context, version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       created.id,
       created.channelId,
       created.messageId ?? null,
       created.title,
       created.status,
+      created.type,
       created.creatorName,
+      created.creator.actorType,
+      created.creator.actorId,
       created.assigneeId ?? null,
+      created.owner?.actorType ?? null,
+      created.owner?.actorId ?? null,
+      created.reviewer?.actorType ?? null,
+      created.reviewer?.actorId ?? null,
+      created.acceptanceCriteria ? JSON.stringify(created.acceptanceCriteria) : null,
+      created.definitionOfDone ? JSON.stringify(created.definitionOfDone) : null,
+      created.constraints ? JSON.stringify(created.constraints) : null,
+      created.dependsOn ? JSON.stringify(created.dependsOn) : null,
+      created.isBlocked ? 1 : 0,
+      created.blockedReason ?? null,
+      created.sourceChannelId ?? null,
+      created.sourceThreadId ?? null,
       created.context ? JSON.stringify(created.context) : null,
       created.version,
       created.createdAt,
@@ -2431,6 +2658,30 @@ export class CrewdenHub extends DurableObject<Env> {
     return updated;
   }
 
+  private appendAuditLog(entry: Omit<AuditLog, 'id' | 'createdAt' | 'actorId'> & { id?: string; actorId?: string }): AuditLog {
+    const created: AuditLog = {
+      ...entry,
+      id: entry.id ?? crypto.randomUUID(),
+      actorId: entry.actorId ?? entry.actorType,
+      createdAt: new Date().toISOString(),
+    };
+    this.ctx.storage.sql.exec(
+      `INSERT INTO audit_log (id, actor_type, actor_id, action, entity_type, entity_id, task_id, agent_id, detail_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      created.id,
+      created.actorType,
+      created.actorId ?? null,
+      created.action,
+      created.entityType,
+      created.entityId,
+      created.taskId ?? null,
+      created.agentId ?? null,
+      JSON.stringify(created.detailJson),
+      created.createdAt,
+    );
+    return created;
+  }
+
   private triggerDueReminders(now = new Date()): void {
     const due = this.listReminders().filter((reminder) => reminder.status === 'pending' && reminder.triggerAt <= now.toISOString());
     for (const reminder of due) {
@@ -2450,14 +2701,37 @@ export class CrewdenHub extends DurableObject<Env> {
     }
   }
 
-  private updateTask(id: string, patch: Partial<Pick<Task, 'status' | 'assigneeId' | 'context'>>): Task | undefined {
+  private updateTask(id: string, patch: TaskPatch): Task | undefined {
     const existing = this.getTask(id);
     if (!existing) return undefined;
-    const updated: Task = { ...existing, ...patch, version: existing.version + 1, updatedAt: new Date().toISOString() };
+    const owner = patch.owner ?? (patch.assigneeId ? { actorType: 'agent' as const, actorId: patch.assigneeId } : undefined);
+    const updated: Task = {
+      ...existing,
+      ...patch,
+      status: patch.status ? normalizeTaskStatus(patch.status) : existing.status,
+      owner: owner ?? patch.owner ?? existing.owner,
+      assigneeId: patch.assigneeId ?? (owner?.actorType === 'agent' ? owner.actorId : existing.assigneeId),
+      version: existing.version + 1,
+      updatedAt: new Date().toISOString(),
+    };
     this.ctx.storage.sql.exec(
-      'UPDATE tasks SET status = ?, assignee_id = ?, context = ?, version = ?, updated_at = ? WHERE id = ?',
+      `UPDATE tasks
+       SET status = ?, assignee_id = ?, owner_type = ?, owner_id = ?, reviewer_type = ?, reviewer_id = ?,
+           acceptance_criteria = ?, definition_of_done = ?, constraints = ?, depends_on = ?,
+           is_blocked = ?, blocked_reason = ?, context = ?, version = ?, updated_at = ?
+       WHERE id = ?`,
       updated.status,
       updated.assigneeId ?? null,
+      updated.owner?.actorType ?? null,
+      updated.owner?.actorId ?? null,
+      updated.reviewer?.actorType ?? null,
+      updated.reviewer?.actorId ?? null,
+      updated.acceptanceCriteria ? JSON.stringify(updated.acceptanceCriteria) : null,
+      updated.definitionOfDone ? JSON.stringify(updated.definitionOfDone) : null,
+      updated.constraints ? JSON.stringify(updated.constraints) : null,
+      updated.dependsOn ? JSON.stringify(updated.dependsOn) : null,
+      updated.isBlocked ? 1 : 0,
+      updated.blockedReason ?? null,
       updated.context ? JSON.stringify(updated.context) : null,
       updated.version,
       updated.updatedAt,
@@ -2848,6 +3122,16 @@ export class CrewdenHub extends DurableObject<Env> {
     return undefined;
   }
 
+  private validateBlockersComplete(task: { dependsOn?: string[]; context?: { blockedByTaskIds?: string[] } }): string | undefined {
+    const blockerIds = [...new Set([...(task.dependsOn ?? []), ...(task.context?.blockedByTaskIds ?? [])])];
+    for (const blockerId of blockerIds) {
+      const blocker = this.getTask(blockerId);
+      if (!blocker) return 'Unknown task dependency';
+      if (blocker.status !== 'done') return 'Task dependency is not done';
+    }
+    return undefined;
+  }
+
   private hasDependencyPath(fromTaskId: string, targetTaskId: string, visited: Set<string>): boolean {
     if (fromTaskId === targetTaskId) return true;
     if (visited.has(fromTaskId)) return false;
@@ -2862,10 +3146,10 @@ export class CrewdenHub extends DurableObject<Env> {
   private buildOpenTaskSummary(agent: Agent): string | undefined {
     const tasks = this.listTasks();
     const assignedTasks = tasks
-      .filter((task) => task.status !== 'done' && task.assigneeId === agent.id)
+      .filter((task) => task.status !== 'done' && task.status !== 'cancelled' && task.assigneeId === agent.id)
       .slice(0, 20);
     const claimableTasks = tasks
-      .filter((task) => task.status !== 'done' && !task.assigneeId && matchesAgentCapability(agent, task))
+      .filter((task) => task.status !== 'done' && task.status !== 'cancelled' && !task.assigneeId && matchesAgentCapability(agent, task))
       .slice(0, Math.max(0, 20 - assignedTasks.length));
     if (assignedTasks.length === 0 && claimableTasks.length === 0) return undefined;
     const sections: string[] = [];
@@ -2885,7 +3169,7 @@ export class CrewdenHub extends DurableObject<Env> {
     return [
       ...sections,
       '',
-      'Use `crewden task read <taskId> --context`, `crewden task claim <taskId>`, `crewden task update <taskId> --status in_progress|in_review|done|blocked|cancelled`, and `crewden task handoff <taskId> --to agentName --notes "..."` to manage them.',
+      'Use `crewden task read <taskId> --context`, `crewden task claim <taskId>`, `crewden task update <taskId> --status assigned|in_progress|in_review|changes_requested|qa|done|cancelled`, `crewden task block <taskId> --reason "..." --needs "..."`, and `crewden task handoff <taskId> --to agentName --notes "..."` to manage them.',
     ].join('\n');
   }
 
@@ -3117,6 +3401,8 @@ function toMessage(row: Row): Message {
     senderName: String(row.sender_name),
     content: String(row.content),
     agentId: row.agent_id ? String(row.agent_id) : undefined,
+    actorType: String(row.actor_type ?? (row.agent_id ? 'agent' : 'human')) as ActorType,
+    actorId: String(row.actor_id ?? row.agent_id ?? row.sender_name),
     threadRootId: row.thread_root_id ? String(row.thread_root_id) : undefined,
     mentions: row.mentions ? JSON.parse(String(row.mentions)) as Message['mentions'] : undefined,
     createdAt: String(row.created_at),
@@ -3156,19 +3442,49 @@ function toAgentDelegation(row: Row): AgentDelegation {
 }
 
 function toTask(row: Row): Task {
+  const context = row.context ? JSON.parse(String(row.context)) as Task['context'] : undefined;
+  const ownerId = row.owner_id ? String(row.owner_id) : row.assignee_id ? String(row.assignee_id) : undefined;
+  const reviewerId = row.reviewer_id ? String(row.reviewer_id) : context?.reviewerAgentId;
   return {
     id: String(row.id),
     channelId: String(row.channel_id),
     messageId: row.message_id ? String(row.message_id) : undefined,
     title: String(row.title),
-    status: String(row.status) as TaskStatus,
+    status: normalizeTaskStatus(String(row.status)),
+    type: String(row.type ?? 'feature') as Task['type'],
     creatorName: String(row.creator_name),
+    creator: {
+      actorType: String(row.creator_type ?? 'human') as ActorType,
+      actorId: String(row.creator_id ?? row.creator_name),
+    },
     assigneeId: row.assignee_id ? String(row.assignee_id) : undefined,
-    context: row.context ? JSON.parse(String(row.context)) as Task['context'] : undefined,
+    owner: ownerId ? { actorType: String(row.owner_type ?? 'agent') as ActorType, actorId: ownerId } : undefined,
+    reviewer: reviewerId ? { actorType: String(row.reviewer_type ?? 'agent') as ActorType, actorId: reviewerId } : undefined,
+    acceptanceCriteria: parseStringArray(row.acceptance_criteria),
+    definitionOfDone: parseStringArray(row.definition_of_done),
+    constraints: parseStringArray(row.constraints),
+    dependsOn: parseStringArray(row.depends_on),
+    isBlocked: Boolean(Number(row.is_blocked ?? 0)),
+    blockedReason: row.blocked_reason ? String(row.blocked_reason) : context?.blockedReason,
+    sourceChannelId: row.source_channel_id ? String(row.source_channel_id) : undefined,
+    sourceThreadId: row.source_thread_id ? String(row.source_thread_id) : undefined,
+    context,
     version: Number(row.version ?? 1),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function parseStringArray(value: string | null): string[] | undefined {
+  if (!value) return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : undefined;
+}
+
+function normalizeTaskStatus(status: string): TaskStatus {
+  if (status === 'todo') return 'backlog';
+  if (status === 'blocked') return 'in_progress';
+  return status as TaskStatus;
 }
 
 function toGoal(row: Row): GoalBrief {
@@ -3308,16 +3624,23 @@ function isHighRiskTask(task: { context?: { risks?: string[] } }): boolean {
 
 function isTaskTransitionAllowed(from: TaskStatus, to: TaskStatus): boolean {
   if (from === to) return true;
-  if (to === 'cancelled') return true;
   const allowed: Record<TaskStatus, TaskStatus[]> = {
-    todo: ['in_progress', 'blocked'],
-    in_progress: ['in_review', 'blocked'],
-    in_review: ['done'],
+    backlog: ['spec_needed', 'ready', 'cancelled'],
+    spec_needed: ['ready', 'backlog'],
+    ready: ['assigned', 'backlog', 'cancelled'],
+    assigned: ['in_progress', 'ready', 'cancelled'],
+    in_progress: ['in_review', 'cancelled'],
+    in_review: ['changes_requested', 'qa', 'done', 'cancelled'],
+    changes_requested: ['in_progress', 'cancelled'],
+    qa: ['done', 'changes_requested', 'cancelled'],
     done: [],
-    blocked: ['todo'],
     cancelled: [],
   };
   return allowed[from].includes(to);
+}
+
+function actorFromPatch(actorType: ActorType | undefined, actorId: string | undefined): { actorType: ActorType; actorId: string } | undefined {
+  return actorId ? { actorType: actorType ?? 'agent', actorId } : undefined;
 }
 
 function toReminder(row: Row): Reminder {
@@ -3385,7 +3708,7 @@ function toTaskDelivery(task: Task) {
       task.context?.background ? `Background: ${task.context.background}` : undefined,
       task.context?.handoffNotes?.length ? `Latest handoff: ${task.context.handoffNotes.at(-1)}` : undefined,
       '',
-      'Use `crewden task read <taskId> --context` for details and `crewden task update <taskId> --status in_progress|in_review|done|blocked|cancelled` when you make progress.',
+      'Use `crewden task read <taskId> --context` for details, `crewden task update <taskId> --status assigned|in_progress|in_review|changes_requested|qa|done|cancelled` when you make progress, and `crewden task block <taskId> --reason "..." --needs "..."` for blockers.',
     ].filter(Boolean).join('\n'),
     createdAt: task.updatedAt,
   };

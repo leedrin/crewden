@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
-import { CreateTaskRequestSchema, CreateTaskReviewRequestSchema, MessageToTaskRequestSchema, PatchTaskRequestSchema, ReviewDecisionRequestSchema, TaskStatusSchema, type TaskReview, type TaskStatus } from '@crewden/shared';
+import { CreateTaskRequestSchema, CreateTaskReviewRequestSchema, MessageToTaskRequestSchema, PatchTaskRequestSchema, ReviewDecisionRequestSchema, TaskStatusSchema, type ActorType, type TaskReview, type TaskStatus } from '@crewden/shared';
 import { getStore } from '../db.js';
 import { eventBus } from '../events.js';
 import { notifyTaskAssignee, notifyTasksBlockedBy } from '../taskDelivery.js';
@@ -30,10 +30,31 @@ export async function taskRoutes(app: FastifyInstance) {
       channelId: parsed.data.channelId,
       messageId: parsed.data.messageId,
       title: parsed.data.title,
-      status: 'todo',
+      status: parsed.data.status,
+      type: parsed.data.type,
       creatorName: parsed.data.creatorName,
+      creator: { actorType: parsed.data.creatorType, actorId: parsed.data.creatorId ?? parsed.data.creatorName },
       assigneeId: parsed.data.assigneeId,
+      owner: parsed.data.assigneeId ? { actorType: parsed.data.ownerType ?? 'agent', actorId: parsed.data.ownerId ?? parsed.data.assigneeId } : undefined,
+      reviewer: actorFromPatch(parsed.data.reviewerType, parsed.data.reviewerId),
+      acceptanceCriteria: parsed.data.acceptanceCriteria,
+      definitionOfDone: parsed.data.definitionOfDone,
+      constraints: parsed.data.constraints,
+      dependsOn: parsed.data.dependsOn ?? parsed.data.context?.blockedByTaskIds,
+      isBlocked: parsed.data.isBlocked,
+      blockedReason: parsed.data.blockedReason,
+      sourceChannelId: parsed.data.sourceChannelId ?? parsed.data.channelId,
+      sourceThreadId: parsed.data.sourceThreadId,
       context: parsed.data.context,
+    });
+    await getStore().appendAuditLog({
+      actorType: parsed.data.creatorType,
+      actorId: parsed.data.creatorId ?? parsed.data.creatorName,
+      action: 'task.created',
+      entityType: 'task',
+      entityId: task.id,
+      taskId: task.id,
+      detailJson: { status: task.status, type: task.type },
     });
     eventBus.emit({ type: 'task:update', task });
     await notifyTaskAssignee(task);
@@ -53,14 +74,23 @@ export async function taskRoutes(app: FastifyInstance) {
     if (patch.status && !isTaskTransitionAllowed(existing.status, patch.status)) {
       return reply.status(422).send({ error: 'Invalid task status transition', from: existing.status, to: patch.status });
     }
-    const dependencyError = await validateTaskDependencies(existing.id, patch.context?.blockedByTaskIds);
+    const { ownerType, ownerId, reviewerType, reviewerId, ...taskPatch } = patch;
+    const dependencyError = await validateTaskDependencies(existing.id, taskPatch.dependsOn ?? taskPatch.context?.blockedByTaskIds);
     if (dependencyError) return reply.status(422).send({ error: dependencyError });
-    const task = await store.updateTask(req.params.id, patch);
+    if (taskPatch.status === 'in_progress') {
+      const blockersError = await validateBlockersComplete({ ...existing, ...taskPatch });
+      if (blockersError) return reply.status(422).send({ error: blockersError });
+    }
+    const task = await store.updateTask(req.params.id, {
+      ...taskPatch,
+      owner: actorFromPatch(ownerType, ownerId) ?? (taskPatch.assigneeId ? { actorType: 'agent', actorId: taskPatch.assigneeId } : undefined),
+      reviewer: actorFromPatch(reviewerType, reviewerId),
+    });
     if (!task) return reply.status(404).send({ error: 'Task not found' });
     if (patch.status && patch.status !== existing.status) {
       await store.appendAuditLog({
-        actorType: 'user',
-        actorId: existing.creatorName,
+        actorType: existing.creator.actorType,
+        actorId: existing.creator.actorId,
         action: 'task.status_changed',
         entityType: 'task',
         entityId: task.id,
@@ -92,9 +122,15 @@ export async function taskRoutes(app: FastifyInstance) {
       channelId: message.channelId,
       messageId: message.id,
       title: message.content.slice(0, 200),
-      status: 'todo',
+      status: 'backlog',
       creatorName: parsed.data.creatorName,
+      creator: { actorType: parsed.data.creatorType, actorId: parsed.data.creatorId ?? parsed.data.creatorName },
       assigneeId: parsed.data.assigneeId,
+      owner: parsed.data.assigneeId ? { actorType: 'agent', actorId: parsed.data.assigneeId } : undefined,
+      type: 'feature',
+      isBlocked: false,
+      sourceChannelId: message.channelId,
+      sourceThreadId: message.threadRootId,
       context: {
         ...parsed.data.context,
         sourceMessageIds: Array.from(new Set([...(parsed.data.context?.sourceMessageIds ?? []), message.id])),
@@ -192,16 +228,23 @@ function isHighRisk(task: { context?: { risks?: string[] } }): boolean {
 
 function isTaskTransitionAllowed(from: TaskStatus, to: TaskStatus): boolean {
   if (from === to) return true;
-  if (to === 'cancelled') return true;
   const allowed: Record<TaskStatus, TaskStatus[]> = {
-    todo: ['in_progress', 'blocked'],
-    in_progress: ['in_review', 'blocked'],
-    in_review: ['done'],
+    backlog: ['spec_needed', 'ready', 'cancelled'],
+    spec_needed: ['ready', 'backlog'],
+    ready: ['assigned', 'backlog', 'cancelled'],
+    assigned: ['in_progress', 'ready', 'cancelled'],
+    in_progress: ['in_review', 'cancelled'],
+    in_review: ['changes_requested', 'qa', 'done', 'cancelled'],
+    changes_requested: ['in_progress', 'cancelled'],
+    qa: ['done', 'changes_requested', 'cancelled'],
     done: [],
-    blocked: ['todo'],
     cancelled: [],
   };
   return allowed[from].includes(to);
+}
+
+function actorFromPatch(actorType: ActorType | undefined, actorId: string | undefined): { actorType: ActorType; actorId: string } | undefined {
+  return actorId ? { actorType: actorType ?? 'agent', actorId } : undefined;
 }
 
 async function validateTaskDependencies(taskId: string, blockedByTaskIds: string[] | undefined): Promise<string | undefined> {
@@ -214,6 +257,16 @@ async function validateTaskDependencies(taskId: string, blockedByTaskIds: string
     if (await hasDependencyPath(blockerId, taskId, new Set([taskId]))) {
       return 'Circular task dependency';
     }
+  }
+  return undefined;
+}
+
+async function validateBlockersComplete(task: { dependsOn?: string[]; context?: { blockedByTaskIds?: string[] } }): Promise<string | undefined> {
+  const blockerIds = [...new Set([...(task.dependsOn ?? []), ...(task.context?.blockedByTaskIds ?? [])])];
+  for (const blockerId of blockerIds) {
+    const blocker = await getStore().getTask(blockerId);
+    if (!blocker) return 'Unknown task dependency';
+    if (blocker.status !== 'done') return 'Task dependency is not done';
   }
   return undefined;
 }

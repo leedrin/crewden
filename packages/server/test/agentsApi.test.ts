@@ -25,7 +25,7 @@ describe('GET /api/version', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.component).toBe('server');
-    expect(body.version).toBe(process.env.CREWDEN_VERSION || '1.5.1');
+    expect(body.version).toBe(process.env.CREWDEN_VERSION || '2.0.0');
     expect(body.version).toBeTruthy();
     await app.close();
   });
@@ -595,7 +595,7 @@ describe('agent internal API', () => {
       channelId: createdChannel.json().id,
       title: 'verify integration pipeline',
       creatorName: 'user',
-      status: 'todo',
+      status: 'backlog',
       context: { goal: 'Ship MCP toolset' },
     });
     await app.close();
@@ -681,7 +681,7 @@ describe('agent internal API', () => {
       id: 'task-1',
       channelId: 'general',
       title: 'agent task',
-      status: 'todo',
+      status: 'assigned',
       creatorName: 'user',
       assigneeId: 'agent-1',
       context: { goal: 'complete assigned task' },
@@ -697,7 +697,7 @@ describe('agent internal API', () => {
       id: 'task-2',
       channelId: 'general',
       title: 'someone else task',
-      status: 'todo',
+      status: 'assigned',
       creatorName: 'user',
       assigneeId: 'agent-2',
     });
@@ -747,7 +747,7 @@ describe('agent internal API', () => {
       id: 'task-claim',
       channelId: 'general',
       title: 'coding task for agent',
-      status: 'todo',
+      status: 'backlog',
       creatorName: 'user',
       context: { goal: 'coding implementation' },
     });
@@ -758,7 +758,7 @@ describe('agent internal API', () => {
 
     const claimed = await app.inject({ method: 'POST', url: '/internal/agent/agent-1/tasks/task-claim/claim', headers });
     expect(claimed.statusCode).toBe(200);
-    expect(claimed.json()).toMatchObject({ assigneeId: 'agent-1', status: 'in_progress', context: { claimedByAgentId: 'agent-1' } });
+    expect(claimed.json()).toMatchObject({ assigneeId: 'agent-1', status: 'assigned', context: { claimedByAgentId: 'agent-1' } });
     expect(claimed.json().context.progressEvents.at(-1)).toMatchObject({ type: 'claimed', agentId: 'agent-1' });
     expect(await store.listMessages('general')).toContainEqual(expect.objectContaining({
       senderName: 'Bot',

@@ -332,9 +332,9 @@ function RuntimeSelect({ value, machine, busy, onChange }: { value: string; mach
 }
 
 function WorkSummary({ agent, tasks }: { agent: Agent; tasks: Task[] }) {
-  const openAssigned = tasks.filter((task) => task.assigneeId === agent.id && task.status !== 'done');
-  const blocked = openAssigned.filter((task) => task.context?.blockedReason);
-  const claimable = tasks.filter((task) => !task.assigneeId && task.status !== 'done' && matchesAgentTask(agent, task)).slice(0, 5);
+  const openAssigned = tasks.filter((task) => task.assigneeId === agent.id && task.status !== 'done' && task.status !== 'cancelled');
+  const blocked = openAssigned.filter((task) => task.isBlocked || task.blockedReason || task.context?.blockedReason);
+  const claimable = tasks.filter((task) => !task.assigneeId && task.status !== 'done' && task.status !== 'cancelled' && matchesAgentTask(agent, task)).slice(0, 5);
   return (
     <div style={{ border: '2px solid #000', background: '#fff', padding: 9, display: 'grid', gap: 7 }}>
       <strong style={{ fontSize: 12 }}>WORK SUMMARY</strong>
@@ -343,10 +343,10 @@ function WorkSummary({ agent, tasks }: { agent: Agent; tasks: Task[] }) {
         <span>CLAIMABLE {claimable.length}</span>
         <span style={{ color: blocked.length ? '#b00020' : '#555' }}>BLOCKED {blocked.length}</span>
       </div>
-      {[...blocked, ...openAssigned.filter((task) => !task.context?.blockedReason).slice(0, 3), ...claimable].slice(0, 5).map((task) => (
+      {[...blocked, ...openAssigned.filter((task) => !(task.isBlocked || task.blockedReason || task.context?.blockedReason)).slice(0, 3), ...claimable].slice(0, 5).map((task) => (
         <div key={task.id} style={{ borderTop: '1px solid #ddd', paddingTop: 5, fontSize: 11 }}>
-          <strong>{task.context?.blockedReason ? 'BLOCKED' : task.assigneeId ? 'ASSIGNED' : 'CLAIMABLE'}</strong> {task.title}
-          {task.context?.blockedReason ? <div style={{ color: '#b00020' }}>{task.context.blockedReason}</div> : null}
+          <strong>{task.isBlocked || task.blockedReason || task.context?.blockedReason ? 'BLOCKED' : task.assigneeId ? 'ASSIGNED' : 'CLAIMABLE'}</strong> {task.title}
+          {task.blockedReason || task.context?.blockedReason ? <div style={{ color: '#b00020' }}>{task.blockedReason ?? task.context?.blockedReason}</div> : null}
         </div>
       ))}
     </div>

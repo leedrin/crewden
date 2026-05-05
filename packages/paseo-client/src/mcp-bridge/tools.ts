@@ -304,7 +304,7 @@ export function createToolDefinitions(): ToolDefinition[] {
         type: "object",
         properties: {
           channel: { type: "string", description: "Channel id or name." },
-          status: { type: "string", description: "todo|in_progress|in_review|done|blocked|cancelled" },
+          status: { type: "string", description: "backlog|spec_needed|ready|assigned|in_progress|in_review|changes_requested|qa|done|cancelled" },
           all: { type: "boolean", description: "Set true to include tasks not assigned to current agent." },
         },
         additionalProperties: false,
@@ -344,7 +344,7 @@ export function createToolDefinitions(): ToolDefinition[] {
         type: "object",
         properties: {
           taskId: { type: "string", description: "Task id." },
-          status: { type: "string", description: "todo|in_progress|in_review|done|blocked|cancelled" },
+          status: { type: "string", description: "backlog|spec_needed|ready|assigned|in_progress|in_review|changes_requested|qa|done|cancelled. Use crewden_block_task to record blockers instead of a blocked status." },
           assigneeId: { type: "string", description: "Assignee agent id/name." },
           context: { type: "object", description: "Task context patch." },
         },
@@ -396,6 +396,30 @@ export function createToolDefinitions(): ToolDefinition[] {
         const taskId = requiredString(args.taskId, "taskId");
         return client.post(agentPath(client, `/tasks/${encodeURIComponent(taskId)}/progress`), {
           body: { detail: requiredString(args.detail, "detail") },
+        });
+      },
+    },
+    {
+      name: "crewden_block_task",
+      title: "Report Task Blocker",
+      description: "Record a blocker without changing the task's 10-state workflow status.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "Task id." },
+          reason: { type: "string", description: "Why the task is blocked." },
+          needs: { type: "string", description: "What is needed to unblock the task." },
+        },
+        required: ["taskId", "reason", "needs"],
+        additionalProperties: false,
+      },
+      run: async (args, { client }) => {
+        const taskId = requiredString(args.taskId, "taskId");
+        return client.post(agentPath(client, `/tasks/${encodeURIComponent(taskId)}/block`), {
+          body: {
+            reason: requiredString(args.reason, "reason"),
+            needs: requiredString(args.needs, "needs"),
+          },
         });
       },
     },

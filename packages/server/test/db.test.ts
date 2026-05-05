@@ -51,7 +51,7 @@ describe('audit log', () => {
       entityId: 'task-1',
       taskId: 'task-1',
       agentId: 'agent-1',
-      detailJson: { from: 'todo', to: 'in_progress' },
+      detailJson: { from: 'assigned', to: 'in_progress' },
     });
 
     expect(entry).toMatchObject({
@@ -62,7 +62,7 @@ describe('audit log', () => {
       entityId: 'task-1',
       taskId: 'task-1',
       agentId: 'agent-1',
-      detailJson: { from: 'todo', to: 'in_progress' },
+      detailJson: { from: 'assigned', to: 'in_progress' },
     });
     expect(entry.id).toBeTruthy();
     expect(entry.createdAt).toBeTruthy();

@@ -37,6 +37,8 @@ import {
   PatchKnowledgeEntryRequestSchema,
   SearchKnowledgeRequestSchema,
   PatchTaskRequestSchema,
+  MessageSchema,
+  AuditLogEntrySchema,
   StartGoalAlignmentRequestSchema,
   TaskSchema,
 } from '../src/validation.js';
@@ -222,7 +224,7 @@ describe('Internal agent API schemas', () => {
     expect(InternalDmSendRequestSchema.safeParse({ to: 'agent-2', content: 'secret' }).success).toBe(true);
     expect(InternalAgentResolveRequestSchema.safeParse({ query: '产品经理' }).success).toBe(true);
     expect(InternalAgentDelegateRequestSchema.safeParse({ to: 'agent-2', content: 'work', startIfInactive: true }).success).toBe(true);
-    expect(InternalTaskListRequestSchema.safeParse({ status: 'todo', all: 'true' }).success).toBe(true);
+    expect(InternalTaskListRequestSchema.safeParse({ status: 'backlog', all: 'true' }).success).toBe(true);
     expect(InternalTaskUpdateRequestSchema.safeParse({ status: 'in_progress' }).success).toBe(true);
     expect(InternalInboxRequestSchema.safeParse({ limit: '10' }).success).toBe(true);
     expect(InternalTaskProgressRequestSchema.safeParse({ detail: 'still working' }).success).toBe(true);
@@ -356,8 +358,11 @@ describe('Task schemas', () => {
       id: 'task-1',
       channelId: 'general',
       title: 'ship board',
-      status: 'todo',
+      status: 'backlog',
+      type: 'feature',
       creatorName: 'user',
+      creator: { actorType: 'human', actorId: 'user' },
+      isBlocked: false,
       context: {
         goal: 'ship context',
         acceptanceCriteria: ['passes tests'],
@@ -376,8 +381,32 @@ describe('Task schemas', () => {
   });
 
   it('accepts blocked task status and rejects empty patches', () => {
-    expect(PatchTaskRequestSchema.safeParse({ status: 'blocked' }).success).toBe(true);
+    expect(PatchTaskRequestSchema.safeParse({ isBlocked: true, blockedReason: 'missing input' }).success).toBe(true);
+    expect(PatchTaskRequestSchema.safeParse({ status: 'changes_requested' }).success).toBe(true);
     expect(PatchTaskRequestSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('accepts polymorphic message actors and audit entries', () => {
+    const now = new Date().toISOString();
+    expect(MessageSchema.safeParse({
+      id: 'msg-1',
+      channelId: 'general',
+      actorType: 'agent',
+      actorId: 'agent-1',
+      senderName: 'Agent One',
+      content: 'done',
+      createdAt: now,
+    }).success).toBe(true);
+    expect(AuditLogEntrySchema.safeParse({
+      id: 'audit-1',
+      actorType: 'system',
+      actorId: 'crewden',
+      action: 'task.status_changed',
+      entityType: 'task',
+      entityId: 'task-1',
+      detail: { from: 'assigned', to: 'in_progress' },
+      createdAt: now,
+    }).success).toBe(true);
   });
 });
 

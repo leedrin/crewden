@@ -26,7 +26,7 @@ describe('task API', () => {
       },
     });
     expect(created.statusCode).toBe(201);
-    expect(created.json()).toMatchObject({ channelId: 'general', title: 'ship task board', status: 'todo' });
+    expect(created.json()).toMatchObject({ channelId: 'general', title: 'ship task board', status: 'backlog' });
     expect(created.json().context.goal).toBe('ship board');
     const taskId = created.json().id;
 
@@ -37,13 +37,13 @@ describe('task API', () => {
     const patched = await app.inject({
       method: 'PATCH',
       url: `/api/tasks/${taskId}`,
-      payload: { status: 'in_progress', context: { goal: 'ship board', handoffNotes: ['ready for review'] } },
+      payload: { status: 'ready', context: { goal: 'ship board', handoffNotes: ['ready for review'] } },
     });
     expect(patched.statusCode).toBe(200);
-    expect(patched.json().status).toBe('in_progress');
+    expect(patched.json().status).toBe('ready');
     expect(patched.json().context.handoffNotes).toEqual(['ready for review']);
 
-    const filtered = await app.inject({ method: 'GET', url: '/api/tasks?status=in_progress' });
+    const filtered = await app.inject({ method: 'GET', url: '/api/tasks?status=ready' });
     expect(filtered.json()).toHaveLength(1);
 
     const deleted = await app.inject({ method: 'DELETE', url: `/api/tasks/${taskId}` });
@@ -69,6 +69,18 @@ describe('task API', () => {
     expect(invalid.statusCode).toBe(422);
     expect(invalid.json()).toMatchObject({ error: 'Invalid task status transition' });
 
+    const ready = await app.inject({
+      method: 'PATCH',
+      url: `/api/tasks/${taskId}`,
+      payload: { status: 'ready' },
+    });
+    expect(ready.statusCode).toBe(200);
+    const assigned = await app.inject({
+      method: 'PATCH',
+      url: `/api/tasks/${taskId}`,
+      payload: { status: 'assigned' },
+    });
+    expect(assigned.statusCode).toBe(200);
     const started = await app.inject({
       method: 'PATCH',
       url: `/api/tasks/${taskId}`,
@@ -80,10 +92,10 @@ describe('task API', () => {
     const blocked = await app.inject({
       method: 'PATCH',
       url: `/api/tasks/${taskId}`,
-      payload: { status: 'blocked' },
+      payload: { isBlocked: true, blockedReason: 'missing input' },
     });
     expect(blocked.statusCode).toBe(200);
-    expect(blocked.json().status).toBe('blocked');
+    expect(blocked.json()).toMatchObject({ status: 'in_progress', isBlocked: true, blockedReason: 'missing input' });
 
     await app.close();
   });
@@ -98,18 +110,18 @@ describe('task API', () => {
     const task = created.json();
     expect(task.version).toBe(1);
 
-    const started = await app.inject({
+    const ready = await app.inject({
       method: 'PATCH',
       url: `/api/tasks/${task.id}`,
-      payload: { status: 'in_progress', expectedVersion: task.version },
+      payload: { status: 'ready', expectedVersion: task.version },
     });
-    expect(started.statusCode).toBe(200);
-    expect(started.json()).toMatchObject({ status: 'in_progress', version: 2 });
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toMatchObject({ status: 'ready', version: 2 });
 
     const stale = await app.inject({
       method: 'PATCH',
       url: `/api/tasks/${task.id}`,
-      payload: { status: 'blocked', expectedVersion: task.version },
+      payload: { status: 'assigned', expectedVersion: task.version },
     });
     expect(stale.statusCode).toBe(409);
     expect(stale.json()).toMatchObject({ error: 'Task version conflict', currentVersion: 2 });
@@ -117,10 +129,10 @@ describe('task API', () => {
     const current = await app.inject({
       method: 'PATCH',
       url: `/api/tasks/${task.id}`,
-      payload: { status: 'blocked', expectedVersion: started.json().version },
+      payload: { status: 'assigned', expectedVersion: ready.json().version },
     });
     expect(current.statusCode).toBe(200);
-    expect(current.json()).toMatchObject({ status: 'blocked', version: 3 });
+    expect(current.json()).toMatchObject({ status: 'assigned', version: 3 });
 
     await app.close();
   });
@@ -153,10 +165,22 @@ describe('task API', () => {
     });
     const task = created.json();
 
+    const ready = await app.inject({
+      method: 'PATCH',
+      url: `/api/tasks/${task.id}`,
+      payload: { status: 'ready', expectedVersion: task.version },
+    });
+    expect(ready.statusCode).toBe(200);
+    const assigned = await app.inject({
+      method: 'PATCH',
+      url: `/api/tasks/${task.id}`,
+      payload: { status: 'assigned', expectedVersion: ready.json().version },
+    });
+    expect(assigned.statusCode).toBe(200);
     const started = await app.inject({
       method: 'PATCH',
       url: `/api/tasks/${task.id}`,
-      payload: { status: 'in_progress', expectedVersion: task.version },
+      payload: { status: 'in_progress', expectedVersion: assigned.json().version },
     });
     expect(started.statusCode).toBe(200);
 
@@ -171,12 +195,12 @@ describe('task API', () => {
     const logs = await store.listAuditLogs({ taskId: task.id });
     expect(logs).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        actorType: 'user',
+        actorType: 'human',
         action: 'task.status_changed',
         entityType: 'task',
         entityId: task.id,
         taskId: task.id,
-        detailJson: expect.objectContaining({ from: 'todo', to: 'in_progress' }),
+        detailJson: expect.objectContaining({ from: 'assigned', to: 'in_progress' }),
       }),
       expect.objectContaining({
         actorType: 'agent',
@@ -296,10 +320,20 @@ describe('task API', () => {
     });
     expect(deliverSpy).not.toHaveBeenCalled();
 
+    const ready = await app.inject({
+      method: 'PATCH',
+      url: `/api/tasks/${blocker.json().id}`,
+      payload: { status: 'ready', expectedVersion: blocker.json().version },
+    });
+    const assigned = await app.inject({
+      method: 'PATCH',
+      url: `/api/tasks/${blocker.json().id}`,
+      payload: { status: 'assigned', expectedVersion: ready.json().version },
+    });
     const started = await app.inject({
       method: 'PATCH',
       url: `/api/tasks/${blocker.json().id}`,
-      payload: { status: 'in_progress', expectedVersion: blocker.json().version },
+      payload: { status: 'in_progress', expectedVersion: assigned.json().version },
     });
     const review = await app.inject({
       method: 'PATCH',

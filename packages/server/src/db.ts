@@ -5,16 +5,20 @@ import { nanoid } from 'nanoid';
 import { drizzle, type LibSQLDatabase } from 'drizzle-orm/libsql';
 import { createClient, type Client } from '@libsql/client';
 import { asc, desc, eq, inArray, or } from 'drizzle-orm';
-import type { Channel, Message, MessageThread, Machine, Agent, RuntimeId, AgentStatus, AgentActivity, DirectMessage, DirectMessageThread, AgentDelegation, AgentTokenInfo, Task, TaskStatus, GoalBrief, GoalBriefStatus, GoalAlignment, GoalAlignmentStatus, Reminder, ReminderStatus, SearchMessageResult, KnowledgeEntry, KnowledgeKind, KnowledgeSearchResult, KnowledgeStatus } from '@crewden/shared';
+import type { ActorType, Channel, Message, MessageThread, Machine, Agent, RuntimeId, AgentStatus, AgentActivity, DirectMessage, DirectMessageThread, AgentDelegation, AgentTokenInfo, Task, TaskStatus, GoalBrief, GoalBriefStatus, GoalAlignment, GoalAlignmentStatus, Reminder, ReminderStatus, SearchMessageResult, KnowledgeEntry, KnowledgeKind, KnowledgeSearchResult, KnowledgeStatus } from '@crewden/shared';
 import { resolveAgentReference } from '@crewden/hub-core';
 import { activities, agentDelegations, agentTokens, agents, auditLogs, channels, directMessages, goalAlignments, goals, knowledgeEntries, machines, messages, reminders, tasks } from './schema.js';
 
 type Database = LibSQLDatabase<typeof import('./schema.js')>;
+type NewMessage = Omit<Message, 'createdAt' | 'actorType' | 'actorId'> & Partial<Pick<Message, 'actorType' | 'actorId'>>;
+type NewTask = Omit<Task, 'createdAt' | 'updatedAt' | 'version' | 'type' | 'creator' | 'owner' | 'reviewer' | 'isBlocked'> &
+  Partial<Pick<Task, 'type' | 'creator' | 'owner' | 'reviewer' | 'isBlocked'>>;
+type TaskPatch = Partial<Pick<Task, 'status' | 'assigneeId' | 'owner' | 'reviewer' | 'acceptanceCriteria' | 'definitionOfDone' | 'constraints' | 'dependsOn' | 'isBlocked' | 'blockedReason' | 'context'>>;
 
 export type AuditLog = {
   id: string;
-  actorType: 'user' | 'agent' | 'daemon' | 'system';
-  actorId?: string;
+  actorType: ActorType;
+  actorId: string;
   action: string;
   entityType: string;
   entityId: string;
@@ -78,11 +82,15 @@ export async function initDb(): Promise<void> {
         sender_name TEXT NOT NULL,
         content TEXT NOT NULL,
         agent_id TEXT,
+        actor_type TEXT NOT NULL DEFAULT 'human',
+        actor_id TEXT,
         thread_root_id TEXT,
         mentions TEXT,
         created_at TEXT NOT NULL
       )
     `);
+    await database.run(`ALTER TABLE messages ADD COLUMN actor_type TEXT NOT NULL DEFAULT 'human'`).catch(() => undefined);
+    await database.run(`ALTER TABLE messages ADD COLUMN actor_id TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE messages ADD COLUMN thread_root_id TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE messages ADD COLUMN mentions TEXT`).catch(() => undefined);
     await database.run(`
@@ -142,8 +150,23 @@ export async function initDb(): Promise<void> {
         message_id TEXT,
         title TEXT NOT NULL,
         status TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'feature',
         creator_name TEXT NOT NULL,
+        creator_type TEXT NOT NULL DEFAULT 'human',
+        creator_id TEXT,
         assignee_id TEXT,
+        owner_type TEXT,
+        owner_id TEXT,
+        reviewer_type TEXT,
+        reviewer_id TEXT,
+        acceptance_criteria TEXT,
+        definition_of_done TEXT,
+        constraints TEXT,
+        depends_on TEXT,
+        is_blocked INTEGER NOT NULL DEFAULT 0,
+        blocked_reason TEXT,
+        source_channel_id TEXT,
+        source_thread_id TEXT,
         context TEXT,
         version INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
@@ -220,6 +243,25 @@ export async function initDb(): Promise<void> {
     `);
     await database.run(`ALTER TABLE tasks ADD COLUMN context TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN type TEXT NOT NULL DEFAULT 'feature'`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN creator_type TEXT NOT NULL DEFAULT 'human'`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN creator_id TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN owner_type TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN owner_id TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN reviewer_type TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN reviewer_id TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN acceptance_criteria TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN definition_of_done TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN constraints TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN depends_on TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN blocked_reason TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN source_channel_id TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN source_thread_id TEXT`).catch(() => undefined);
+    await database.run(`UPDATE tasks SET status = 'backlog' WHERE status = 'todo'`).catch(() => undefined);
+    await database.run(`UPDATE tasks SET is_blocked = 1, status = 'in_progress' WHERE status = 'blocked'`).catch(() => undefined);
+    await database.run(`UPDATE messages SET actor_type = 'agent', actor_id = agent_id WHERE agent_id IS NOT NULL AND actor_id IS NULL`).catch(() => undefined);
+    await database.run(`UPDATE messages SET actor_type = 'human', actor_id = sender_name WHERE actor_id IS NULL`).catch(() => undefined);
     await database.run(`
       CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY,
@@ -310,6 +352,8 @@ function toMessage(row: typeof messages.$inferSelect): Message {
     senderName: row.senderName,
     content: row.content,
     agentId: row.agentId ?? undefined,
+    actorType: row.actorType as ActorType,
+    actorId: row.actorId ?? row.agentId ?? row.senderName,
     threadRootId: row.threadRootId ?? undefined,
     mentions: row.mentions ? JSON.parse(row.mentions) as Message['mentions'] : undefined,
     createdAt: row.createdAt,
@@ -362,7 +406,7 @@ function toAuditLog(row: typeof auditLogs.$inferSelect): AuditLog {
   return {
     id: row.id,
     actorType: row.actorType as AuditLog['actorType'],
-    actorId: row.actorId ?? undefined,
+    actorId: row.actorId ?? 'unknown',
     action: row.action,
     entityType: row.entityType,
     entityId: row.entityId,
@@ -374,19 +418,49 @@ function toAuditLog(row: typeof auditLogs.$inferSelect): AuditLog {
 }
 
 function toTask(row: typeof tasks.$inferSelect): Task {
+  const context = row.context ? JSON.parse(row.context) as Task['context'] : undefined;
+  const ownerId = row.ownerId ?? row.assigneeId ?? undefined;
+  const reviewerId = row.reviewerId ?? context?.reviewerAgentId ?? undefined;
   return {
     id: row.id,
     channelId: row.channelId,
     messageId: row.messageId ?? undefined,
     title: row.title,
-    status: row.status as TaskStatus,
+      status: normalizeTaskStatus(row.status),
+    type: row.type as Task['type'],
     creatorName: row.creatorName,
+    creator: {
+      actorType: row.creatorType as ActorType,
+      actorId: row.creatorId ?? row.creatorName,
+    },
     assigneeId: row.assigneeId ?? undefined,
-    context: row.context ? JSON.parse(row.context) as Task['context'] : undefined,
+    owner: ownerId ? { actorType: (row.ownerType as ActorType | null) ?? 'agent', actorId: ownerId } : undefined,
+    reviewer: reviewerId ? { actorType: (row.reviewerType as ActorType | null) ?? 'agent', actorId: reviewerId } : undefined,
+    acceptanceCriteria: parseStringArray(row.acceptanceCriteria),
+    definitionOfDone: parseStringArray(row.definitionOfDone),
+    constraints: parseStringArray(row.constraints),
+    dependsOn: parseStringArray(row.dependsOn),
+    isBlocked: Boolean(row.isBlocked),
+    blockedReason: row.blockedReason ?? context?.blockedReason,
+    sourceChannelId: row.sourceChannelId ?? undefined,
+    sourceThreadId: row.sourceThreadId ?? undefined,
+    context,
     version: row.version ?? 1,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function parseStringArray(value: string | null): string[] | undefined {
+  if (!value) return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : undefined;
+}
+
+function normalizeTaskStatus(status: string): TaskStatus {
+  if (status === 'todo') return 'backlog';
+  if (status === 'blocked') return 'in_progress';
+  return status as TaskStatus;
 }
 
 function toGoal(row: typeof goals.$inferSelect): GoalBrief {
@@ -546,12 +620,18 @@ export class SqliteStore {
       .map((message) => ({ ...message, channelName: channelMap.get(message.channelId) ?? message.channelId }));
   }
 
-  async createMessage(msg: Omit<Message, 'createdAt'>): Promise<Message> {
+  async createMessage(msg: NewMessage): Promise<Message> {
     await initDb();
-    const message: Message = { ...msg, createdAt: new Date().toISOString() };
+    const message: Message = {
+      ...msg,
+      actorType: msg.actorType ?? (msg.agentId ? 'agent' : 'human'),
+      actorId: msg.actorId ?? msg.agentId ?? msg.senderName,
+      createdAt: new Date().toISOString(),
+    };
     await getDb().insert(messages).values({
       ...message,
       agentId: message.agentId ?? null,
+      actorId: message.actorId,
       threadRootId: message.threadRootId ?? null,
       mentions: message.mentions ? JSON.stringify(message.mentions) : null,
     });
@@ -570,7 +650,7 @@ export class SqliteStore {
     return toMessage(updated);
   }
 
-  async addMessage(msg: Omit<Message, 'createdAt'>): Promise<Message> {
+  async addMessage(msg: NewMessage): Promise<Message> {
     return this.createMessage(msg);
   }
 
@@ -679,17 +759,18 @@ export class SqliteStore {
     return rows.map(toAgentDelegation);
   }
 
-  async appendAuditLog(entry: Omit<AuditLog, 'id' | 'createdAt'> & { id?: string }): Promise<AuditLog> {
+  async appendAuditLog(entry: Omit<AuditLog, 'id' | 'createdAt' | 'actorId'> & { id?: string; actorId?: string }): Promise<AuditLog> {
     await initDb();
     const created: AuditLog = {
       ...entry,
+      actorId: entry.actorId ?? entry.actorType,
       id: entry.id ?? nanoid(),
       createdAt: new Date().toISOString(),
     };
     await getDb().insert(auditLogs).values({
       id: created.id,
       actorType: created.actorType,
-      actorId: created.actorId ?? null,
+      actorId: created.actorId,
       action: created.action,
       entityType: created.entityType,
       entityId: created.entityId,
@@ -731,29 +812,74 @@ export class SqliteStore {
     return task ? toTask(task) : undefined;
   }
 
-  async createTask(task: Omit<Task, 'createdAt' | 'updatedAt' | 'version'>): Promise<Task> {
+  async createTask(task: NewTask): Promise<Task> {
     await initDb();
     const now = new Date().toISOString();
-    const created: Task = { ...task, title: task.title.slice(0, 200), version: 1, createdAt: now, updatedAt: now };
+    const owner = task.owner ?? (task.assigneeId ? { actorType: 'agent' as const, actorId: task.assigneeId } : undefined);
+    const created: Task = {
+      ...task,
+      title: task.title.slice(0, 200),
+      status: normalizeTaskStatus(task.status),
+      type: task.type ?? 'feature',
+      creator: task.creator ?? { actorType: 'human', actorId: task.creatorName },
+      owner,
+      assigneeId: task.assigneeId ?? (owner?.actorType === 'agent' ? owner.actorId : undefined),
+      isBlocked: task.isBlocked ?? false,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
     await getDb().insert(tasks).values({
       ...created,
       messageId: created.messageId ?? null,
       assigneeId: created.assigneeId ?? null,
+      creatorType: created.creator.actorType,
+      creatorId: created.creator.actorId,
+      ownerType: created.owner?.actorType ?? null,
+      ownerId: created.owner?.actorId ?? null,
+      reviewerType: created.reviewer?.actorType ?? null,
+      reviewerId: created.reviewer?.actorId ?? null,
+      acceptanceCriteria: created.acceptanceCriteria ? JSON.stringify(created.acceptanceCriteria) : null,
+      definitionOfDone: created.definitionOfDone ? JSON.stringify(created.definitionOfDone) : null,
+      constraints: created.constraints ? JSON.stringify(created.constraints) : null,
+      dependsOn: created.dependsOn ? JSON.stringify(created.dependsOn) : null,
+      blockedReason: created.blockedReason ?? null,
+      sourceChannelId: created.sourceChannelId ?? null,
+      sourceThreadId: created.sourceThreadId ?? null,
       context: created.context ? JSON.stringify(created.context) : null,
     });
     return created;
   }
 
-  async updateTask(id: string, patch: Partial<Pick<Task, 'status' | 'assigneeId' | 'context'>>): Promise<Task | undefined> {
+  async updateTask(id: string, patch: TaskPatch): Promise<Task | undefined> {
     await initDb();
     const existing = await this.getTask(id);
     if (!existing) return undefined;
-    const updated: Task = { ...existing, ...patch, version: existing.version + 1, updatedAt: new Date().toISOString() };
+    const owner = patch.owner ?? (patch.assigneeId ? { actorType: 'agent' as const, actorId: patch.assigneeId } : undefined);
+    const updated: Task = {
+      ...existing,
+      ...patch,
+      status: patch.status ? normalizeTaskStatus(patch.status) : existing.status,
+      owner: owner ?? patch.owner ?? existing.owner,
+      assigneeId: patch.assigneeId ?? (owner?.actorType === 'agent' ? owner.actorId : existing.assigneeId),
+      version: existing.version + 1,
+      updatedAt: new Date().toISOString(),
+    };
     await getDb()
       .update(tasks)
       .set({
         status: updated.status,
         assigneeId: updated.assigneeId ?? null,
+        ownerType: updated.owner?.actorType ?? null,
+        ownerId: updated.owner?.actorId ?? null,
+        reviewerType: updated.reviewer?.actorType ?? null,
+        reviewerId: updated.reviewer?.actorId ?? null,
+        acceptanceCriteria: updated.acceptanceCriteria ? JSON.stringify(updated.acceptanceCriteria) : null,
+        definitionOfDone: updated.definitionOfDone ? JSON.stringify(updated.definitionOfDone) : null,
+        constraints: updated.constraints ? JSON.stringify(updated.constraints) : null,
+        dependsOn: updated.dependsOn ? JSON.stringify(updated.dependsOn) : null,
+        isBlocked: updated.isBlocked,
+        blockedReason: updated.blockedReason ?? null,
         context: updated.context ? JSON.stringify(updated.context) : null,
         version: updated.version,
         updatedAt: updated.updatedAt,

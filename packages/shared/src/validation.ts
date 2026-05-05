@@ -5,7 +5,13 @@ export const RuntimeIdSchema = z.enum(['claude', 'codex', 'gemini', 'opencode', 
 export const AgentStatusSchema = z.enum(['inactive', 'starting', 'running', 'working', 'idle', 'error']);
 
 export const AgentActivityTypeSchema = z.enum(['thinking', 'working', 'output', 'idle', 'sending', 'error']);
-export const TaskStatusSchema = z.enum(['todo', 'in_progress', 'in_review', 'done', 'blocked', 'cancelled']);
+export const ActorTypeSchema = z.enum(['human', 'agent', 'system']);
+export const ActorSchema = z.object({
+  actorType: ActorTypeSchema,
+  actorId: z.string().min(1),
+});
+export const TaskStatusSchema = z.enum(['backlog', 'spec_needed', 'ready', 'assigned', 'in_progress', 'in_review', 'changes_requested', 'qa', 'done', 'cancelled']);
+export const TaskTypeSchema = z.enum(['feature', 'bug', 'chore', 'research', 'docs']);
 export const GoalBriefStatusSchema = z.enum(['draft', 'confirmed', 'cancelled', 'completed']);
 export const GoalAlignmentStatusSchema = z.enum(['needs_clarification', 'awaiting_confirmation', 'confirmed', 'cancelled']);
 export const GoalAlignmentRiskLevelSchema = z.enum(['low', 'medium', 'high']);
@@ -186,12 +192,50 @@ export const TaskSchema = z.object({
   messageId: z.string().optional(),
   title: z.string(),
   status: TaskStatusSchema,
+  type: TaskTypeSchema,
   creatorName: z.string(),
+  creator: ActorSchema,
   assigneeId: z.string().optional(),
+  owner: ActorSchema.optional(),
+  reviewer: ActorSchema.optional(),
+  acceptanceCriteria: z.array(z.string()).optional(),
+  definitionOfDone: z.array(z.string()).optional(),
+  constraints: z.array(z.string()).optional(),
+  dependsOn: z.array(z.string()).optional(),
+  isBlocked: z.boolean(),
+  blockedReason: z.string().optional(),
+  sourceChannelId: z.string().optional(),
+  sourceThreadId: z.string().optional(),
   context: TaskContextSchema.optional(),
   version: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),
+});
+
+export const MessageSchema = z.object({
+  id: z.string(),
+  channelId: z.string(),
+  agentId: z.string().optional(),
+  actorType: ActorTypeSchema,
+  actorId: z.string().min(1),
+  senderName: z.string(),
+  content: z.string(),
+  threadRootId: z.string().optional(),
+  replyCount: z.number().int().nonnegative().optional(),
+  latestReplyAt: z.string().optional(),
+  mentions: z.array(MentionSchema).optional(),
+  createdAt: z.string(),
+});
+
+export const AuditLogEntrySchema = z.object({
+  id: z.string(),
+  actorType: ActorTypeSchema,
+  actorId: z.string().min(1),
+  action: z.string().min(1),
+  entityType: z.string().min(1),
+  entityId: z.string().min(1),
+  detail: z.record(z.unknown()).optional(),
+  createdAt: z.string(),
 });
 
 export const GoalBriefSchema = z.object({
@@ -358,6 +402,8 @@ export const CreateMessageRequestSchema = z.object({
   senderName: z.string().min(1),
   content: z.string().min(1),
   agentId: z.string().optional(),
+  actorType: ActorTypeSchema.optional(),
+  actorId: z.string().min(1).optional(),
   threadRootId: z.string().optional(),
 });
 
@@ -384,8 +430,24 @@ export const CreateTaskRequestSchema = z.object({
   channelId: z.string().min(1).default('general'),
   messageId: z.string().optional(),
   title: z.string().min(1).max(200),
+  status: TaskStatusSchema.default('backlog'),
+  type: TaskTypeSchema.default('feature'),
   creatorName: z.string().min(1).default('user'),
+  creatorType: ActorTypeSchema.default('human'),
+  creatorId: z.string().min(1).optional(),
   assigneeId: z.string().optional(),
+  ownerType: ActorTypeSchema.optional(),
+  ownerId: z.string().min(1).optional(),
+  reviewerType: ActorTypeSchema.optional(),
+  reviewerId: z.string().min(1).optional(),
+  acceptanceCriteria: z.array(z.string().min(1)).optional(),
+  definitionOfDone: z.array(z.string().min(1)).optional(),
+  constraints: z.array(z.string().min(1)).optional(),
+  dependsOn: z.array(z.string().min(1)).optional(),
+  isBlocked: z.boolean().default(false),
+  blockedReason: z.string().optional(),
+  sourceChannelId: z.string().optional(),
+  sourceThreadId: z.string().optional(),
   context: TaskContextSchema.optional(),
 });
 
@@ -393,10 +455,20 @@ export const PatchTaskRequestSchema = z
   .object({
     status: TaskStatusSchema.optional(),
     assigneeId: z.string().optional(),
+    ownerType: ActorTypeSchema.optional(),
+    ownerId: z.string().min(1).optional(),
+    reviewerType: ActorTypeSchema.optional(),
+    reviewerId: z.string().min(1).optional(),
+    acceptanceCriteria: z.array(z.string().min(1)).optional(),
+    definitionOfDone: z.array(z.string().min(1)).optional(),
+    constraints: z.array(z.string().min(1)).optional(),
+    dependsOn: z.array(z.string().min(1)).optional(),
+    isBlocked: z.boolean().optional(),
+    blockedReason: z.string().optional(),
     context: TaskContextSchema.optional(),
     expectedVersion: z.number().int().positive().optional(),
   })
-  .refine((val) => val.status !== undefined || val.assigneeId !== undefined || val.context !== undefined, {
+  .refine((val) => Object.entries(val).some(([key, value]) => key !== 'expectedVersion' && value !== undefined), {
     message: 'At least one field must be provided',
   });
 
@@ -413,6 +485,8 @@ export const PatchReminderRequestSchema = z.object({
 export const MessageToTaskRequestSchema = z.object({
   assigneeId: z.string().optional(),
   creatorName: z.string().min(1).default('user'),
+  creatorType: ActorTypeSchema.default('human'),
+  creatorId: z.string().min(1).optional(),
   context: TaskContextSchema.optional(),
 });
 
@@ -566,6 +640,8 @@ export const InternalTaskCreateRequestSchema = z.object({
   title: z.string().min(1).max(200),
   creatorName: z.string().min(1).default('user'),
   assigneeId: z.string().optional(),
+  status: TaskStatusSchema.default('backlog'),
+  type: TaskTypeSchema.default('feature'),
   context: TaskContextSchema.optional(),
   messageId: z.string().optional(),
 });
@@ -574,9 +650,11 @@ export const InternalTaskUpdateRequestSchema = z
   .object({
     status: TaskStatusSchema.optional(),
     assigneeId: z.string().optional(),
+    isBlocked: z.boolean().optional(),
+    blockedReason: z.string().optional(),
     context: TaskContextSchema.optional(),
   })
-  .refine((val) => val.status !== undefined || val.assigneeId !== undefined || val.context !== undefined, {
+  .refine((val) => val.status !== undefined || val.assigneeId !== undefined || val.isBlocked !== undefined || val.blockedReason !== undefined || val.context !== undefined, {
     message: 'At least one field must be provided',
   });
 

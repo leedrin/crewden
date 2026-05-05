@@ -138,6 +138,8 @@ describe('App', () => {
       channelId: 'random',
       senderName: 'user',
       content: 'random draft',
+      actorType: 'human',
+      actorId: 'user',
       createdAt: '2026-04-25T00:00:01.000Z',
     });
 
@@ -181,6 +183,8 @@ describe('App', () => {
         channelId: 'general',
         senderName: 'Engineer',
         content: 'Ping @Engineer and @user',
+        actorType: 'human',
+        actorId: 'Engineer',
         createdAt: '2026-04-25T00:00:00.000Z',
       },
       {
@@ -188,6 +192,8 @@ describe('App', () => {
         channelId: 'general',
         senderName: 'Engineer',
         content: 'Plain status update',
+        actorType: 'human',
+        actorId: 'Engineer',
         createdAt: '2026-04-25T00:01:00.000Z',
       },
     ]);
@@ -212,6 +218,8 @@ describe('App', () => {
       channelId: 'general',
       senderName: 'user',
       content: 'Investigate the agent panel priority',
+      actorType: 'human',
+      actorId: 'user',
       replyCount: 1,
       createdAt: '2026-04-25T00:00:00.000Z',
     }]);
@@ -221,6 +229,8 @@ describe('App', () => {
         channelId: 'general',
         senderName: 'user',
         content: 'Investigate the agent panel priority',
+        actorType: 'human',
+        actorId: 'user',
         replyCount: 1,
         createdAt: '2026-04-25T00:00:00.000Z',
       },
@@ -229,6 +239,8 @@ describe('App', () => {
         channelId: 'general',
         senderName: 'Engineer',
         content: 'Opened a thread reply.',
+        actorType: 'agent',
+        actorId: 'agent-thread',
         agentId: 'agent-thread',
         threadRootId: 'msg-thread',
         createdAt: '2026-04-25T00:01:00.000Z',
@@ -397,6 +409,8 @@ describe('App', () => {
         channelId: 'general',
         senderName: 'user',
         content: 'Help me ship a Mac voice input MVP',
+        actorType: 'human',
+        actorId: 'user',
         createdAt: '2026-04-25T00:00:00.000Z',
       },
     ]);
@@ -406,6 +420,8 @@ describe('App', () => {
         channelId: 'general',
         senderName: 'user',
         content: 'Help me ship a Mac voice input MVP',
+        actorType: 'human',
+        actorId: 'user',
         createdAt: '2026-04-25T00:00:00.000Z',
       },
       replies: [],
@@ -495,8 +511,11 @@ describe('App', () => {
         channelId: 'general',
         messageId: 'msg-1',
         title: 'Draft MVP plan',
-        status: 'todo',
+        status: 'backlog',
+        type: 'feature',
         creatorName: 'user',
+        creator: { actorType: 'human', actorId: 'user' },
+        isBlocked: false,
         context: {
           goalId: 'goal-1',
           goalObjective: 'Help me ship a Mac voice input MVP',
@@ -554,8 +573,12 @@ describe('App', () => {
       channelId: 'general',
       title: 'Implement coding task',
       status: 'in_review',
+      type: 'feature',
       creatorName: 'user',
+      creator: { actorType: 'human', actorId: 'user' },
       assigneeId: 'agent-1',
+      isBlocked: true,
+      blockedReason: 'missing API token',
       context: {
         blockedReason: 'missing API token',
         blockedNeeds: 'user provides token',
@@ -676,7 +699,10 @@ describe('App', () => {
       channelId: 'general',
       title: 'Ship reviewed feature',
       status: 'done',
+      type: 'feature',
       creatorName: 'user',
+      creator: { actorType: 'human', actorId: 'user' },
+      isBlocked: false,
       context: {
         reviews: [{
           id: 'review-1',
