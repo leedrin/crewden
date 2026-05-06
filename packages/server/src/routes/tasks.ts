@@ -28,6 +28,8 @@ export async function taskRoutes(app: FastifyInstance) {
     }
     const channel = await getStore().getChannel(parsed.data.channelId, { projectId: parsed.data.projectId });
     if (!channel) return reply.status(404).send({ error: 'Channel not found' });
+    const assignee = parsed.data.assigneeId ? await getStore().findAgentByNameOrId(parsed.data.assigneeId) : undefined;
+    if (parsed.data.assigneeId && !assignee) return reply.status(422).send({ error: 'Unknown assignee' });
 
     const taskId = nanoid();
     const dependencyError = await validateTaskDependencies(taskId, parsed.data.context?.blockedByTaskIds);
@@ -43,8 +45,8 @@ export async function taskRoutes(app: FastifyInstance) {
       type: parsed.data.type,
       creatorName: parsed.data.creatorName,
       creator: { actorType: parsed.data.creatorType, actorId: parsed.data.creatorId ?? parsed.data.creatorName },
-      assigneeId: parsed.data.assigneeId,
-      owner: parsed.data.assigneeId ? { actorType: parsed.data.ownerType ?? 'agent', actorId: parsed.data.ownerId ?? parsed.data.assigneeId } : undefined,
+      assigneeId: assignee?.id,
+      owner: assignee ? { actorType: parsed.data.ownerType ?? 'agent', actorId: parsed.data.ownerId ?? assignee.id } : undefined,
       reviewer: actorFromPatch(parsed.data.reviewerType, parsed.data.reviewerId),
       acceptanceCriteria: parsed.data.acceptanceCriteria,
       definitionOfDone: parsed.data.definitionOfDone,
@@ -91,9 +93,12 @@ export async function taskRoutes(app: FastifyInstance) {
       const blockersError = await validateBlockersComplete({ ...existing, ...taskPatch });
       if (blockersError) return reply.status(422).send({ error: blockersError });
     }
+    const assignee = taskPatch.assigneeId ? await store.findAgentByNameOrId(taskPatch.assigneeId) : undefined;
+    if (taskPatch.assigneeId && !assignee) return reply.status(422).send({ error: 'Unknown assignee' });
     const task = await store.updateTask(req.params.id, {
       ...taskPatch,
-      owner: actorFromPatch(ownerType, ownerId) ?? (taskPatch.assigneeId ? { actorType: 'agent', actorId: taskPatch.assigneeId } : undefined),
+      assigneeId: assignee?.id,
+      owner: actorFromPatch(ownerType, ownerId) ?? (assignee ? { actorType: 'agent', actorId: assignee.id } : undefined),
       reviewer: actorFromPatch(reviewerType, reviewerId),
     });
     if (!task) return reply.status(404).send({ error: 'Task not found' });
@@ -127,6 +132,8 @@ export async function taskRoutes(app: FastifyInstance) {
     if (!message) return reply.status(404).send({ error: 'Message not found' });
     const parsed = MessageToTaskRequestSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
+    const assignee = parsed.data.assigneeId ? await store.findAgentByNameOrId(parsed.data.assigneeId) : undefined;
+    if (parsed.data.assigneeId && !assignee) return reply.status(422).send({ error: 'Unknown assignee' });
 
     const task = await store.createTask({
       id: nanoid(),
@@ -137,8 +144,8 @@ export async function taskRoutes(app: FastifyInstance) {
       status: 'backlog',
       creatorName: parsed.data.creatorName,
       creator: { actorType: parsed.data.creatorType, actorId: parsed.data.creatorId ?? parsed.data.creatorName },
-      assigneeId: parsed.data.assigneeId,
-      owner: parsed.data.assigneeId ? { actorType: 'agent', actorId: parsed.data.assigneeId } : undefined,
+      assigneeId: assignee?.id,
+      owner: assignee ? { actorType: 'agent', actorId: assignee.id } : undefined,
       type: 'feature',
       isBlocked: false,
       sourceChannelId: message.channelId,

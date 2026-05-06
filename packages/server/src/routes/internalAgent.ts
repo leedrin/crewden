@@ -270,6 +270,8 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
     const channel = await findChannel(parsed.data.channel);
     if (!channel) return reply.status(404).send({ error: 'Channel not found' });
+    const assignee = parsed.data.assigneeId ? await store.findAgentByNameOrId(parsed.data.assigneeId) : undefined;
+    if (parsed.data.assigneeId && !assignee) return reply.status(422).send({ error: 'Unknown assignee' });
 
     let normalizedMessageId = parsed.data.messageId;
     if (parsed.data.messageId) {
@@ -288,8 +290,8 @@ export async function internalAgentRoutes(app: FastifyInstance) {
       type: parsed.data.type,
       creatorName: parsed.data.creatorName,
       creator: { actorType: 'agent', actorId: agent.id },
-      assigneeId: parsed.data.assigneeId,
-      owner: parsed.data.assigneeId ? { actorType: 'agent', actorId: parsed.data.assigneeId } : undefined,
+      assigneeId: assignee?.id,
+      owner: assignee ? { actorType: 'agent', actorId: assignee.id } : undefined,
       isBlocked: false,
       context: parsed.data.context,
     });
@@ -973,7 +975,10 @@ export async function internalAgentRoutes(app: FastifyInstance) {
       const blockersError = await validateBlockersComplete({ ...existing, ...parsed.data });
       if (blockersError) return reply.status(422).send({ error: blockersError });
     }
-    const task = await store.updateTask(req.params.taskId, parsed.data);
+    const assignee = parsed.data.assigneeId ? await store.findAgentByNameOrId(parsed.data.assigneeId) : undefined;
+    if (parsed.data.assigneeId && !assignee) return reply.status(422).send({ error: 'Unknown assignee' });
+    const taskPatch = assignee ? { ...parsed.data, assigneeId: assignee.id } : parsed.data;
+    const task = await store.updateTask(req.params.taskId, taskPatch);
     if (!task) return reply.status(404).send({ error: 'Task not found' });
     if (parsed.data.status && parsed.data.status !== existing.status) {
       await store.appendAuditLog({

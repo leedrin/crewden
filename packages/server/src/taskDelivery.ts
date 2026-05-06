@@ -10,7 +10,7 @@ import { isRuntimeSupported, markUnsupportedRuntime } from './runtime/runtime-su
 const ACTIVE_STATUSES = new Set(['starting', 'running', 'working', 'idle']);
 
 export async function notifyTaskAssignee(task: Task): Promise<void> {
-  if (!task.assigneeId || task.status === 'done') return;
+  if (!task.assigneeId || task.status === 'done' || task.status === 'cancelled') return;
   const store = getStore();
   if (await hasOpenDependencies(task)) return;
   const target = await store.findAgentByNameOrId(task.assigneeId);
@@ -70,12 +70,12 @@ async function hasOpenDependencies(task: Task): Promise<boolean> {
 }
 
 export async function buildOpenTaskSummary(agent: Agent): Promise<string | undefined> {
-  const tasks = await getStore().listTasks();
+  const tasks = await getStore().listTasks({ projectId: agent.projectId ?? 'default' });
   const assignedTasks = tasks
-    .filter((task) => task.status !== 'done' && task.assigneeId === agent.id)
+    .filter((task) => task.status !== 'done' && task.status !== 'cancelled' && task.assigneeId === agent.id)
     .slice(0, 20);
   const claimableTasks = tasks
-    .filter((task) => task.status !== 'done' && !task.assigneeId && matchesAgentCapability(agent, task))
+    .filter((task) => task.status !== 'done' && task.status !== 'cancelled' && !task.assigneeId && matchesAgentCapability(agent, task))
     .slice(0, Math.max(0, 20 - assignedTasks.length));
   if (assignedTasks.length === 0 && claimableTasks.length === 0) return undefined;
   const sections: string[] = [];
@@ -95,7 +95,7 @@ export async function buildOpenTaskSummary(agent: Agent): Promise<string | undef
   return [
     ...sections,
     '',
-    'Use `crewden task read <taskId> --context`, `crewden task claim <taskId>`, `crewden task update <taskId> --status assigned|in_progress|in_review|changes_requested|qa|done|cancelled`, `crewden task block <taskId> --reason "..." --needs "..."`, and `crewden task handoff <taskId> --to agentName --notes "..."` to manage them.',
+    'Use `crewden_inbox` for queue context, then `crewden_get_task`, `crewden_claim_task`, `crewden_update_task`, `crewden_progress_task`, `crewden_block_task`, and `crewden_handoff_task` to manage them.',
   ].join('\n');
 }
 
@@ -107,8 +107,8 @@ function formatTaskSummaryLine(task: Task): string {
 export function toTaskDelivery(task: Task) {
   return {
     id: `task:${task.id}:${task.updatedAt}`,
-    channelId: `task:${task.id}`,
-    channelName: `Task ${task.id}`,
+    channelId: task.channelId,
+    channelName: `#${task.channelId}`,
     senderName: 'task-board',
     content: [
       `Task assigned or updated: ${task.title}`,
@@ -119,8 +119,9 @@ export function toTaskDelivery(task: Task) {
       task.context?.background ? `Background: ${task.context.background}` : undefined,
       task.context?.handoffNotes?.length ? `Latest handoff: ${task.context.handoffNotes.at(-1)}` : undefined,
       '',
-      'Use `crewden task read <taskId> --context` for details, `crewden task update <taskId> --status assigned|in_progress|in_review|changes_requested|qa|done|cancelled` when you make progress, and `crewden task block <taskId> --reason "..." --needs "..."` when blocked.',
+      'Use `crewden_get_task` for details, `crewden_update_task`/`crewden_progress_task` for progress, and `crewden_block_task` when blocked.',
     ].filter(Boolean).join('\n'),
+    threadRootId: task.sourceThreadId ?? task.messageId,
     createdAt: task.updatedAt,
   };
 }

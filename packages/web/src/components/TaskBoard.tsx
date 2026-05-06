@@ -165,7 +165,7 @@ export function TaskBoard({ projectId, tasks, channels, agents, onTaskUpdated, o
                 {!isCollapsed ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {filteredTasks.map((task) => (
-                      <TaskCard key={task.id} task={task} agents={agents} channels={channels} onStatus={handleStatus} onDelete={handleDelete} />
+                      <TaskCard key={task.id} task={task} agents={agents} channels={channels} onStatus={handleStatus} onDelete={handleDelete} onPatch={onTaskUpdated} />
                     ))}
                   </div>
                 ) : null}
@@ -176,7 +176,7 @@ export function TaskBoard({ projectId, tasks, channels, agents, onTaskUpdated, o
       ) : (
         <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
           {visibleTasks.map((task) => (
-            <TaskCard key={task.id} task={task} agents={agents} channels={channels} onStatus={handleStatus} onDelete={handleDelete} compact />
+            <TaskCard key={task.id} task={task} agents={agents} channels={channels} onStatus={handleStatus} onDelete={handleDelete} onPatch={onTaskUpdated} compact />
           ))}
         </div>
       )}
@@ -189,12 +189,13 @@ function resolveDropStatus(from: TaskStatus, columnId: BoardColumnId): TaskStatu
   return COLUMNS.find((column) => column.id === columnId)?.defaultStatus ?? from;
 }
 
-function TaskCard({ task, agents, channels, onStatus, onDelete, compact = false }: {
+function TaskCard({ task, agents, channels, onStatus, onDelete, onPatch, compact = false }: {
   task: Task;
   agents: Agent[];
   channels: Channel[];
   onStatus: (task: Task, status: TaskStatus) => void;
   onDelete: (task: Task) => void;
+  onPatch: (task: Task) => void;
   compact?: boolean;
 }) {
   const assignee = agents.find((agent) => agent.id === task.assigneeId);
@@ -204,6 +205,21 @@ function TaskCard({ task, agents, channels, onStatus, onDelete, compact = false 
   const latestReview = task.context?.reviews?.at(-1);
   const reviewer = agents.find((agent) => agent.id === (task.reviewer?.actorId ?? latestReview?.reviewerAgentId ?? task.context?.reviewerAgentId));
   const blocked = task.isBlocked || Boolean(task.blockedReason ?? task.context?.blockedReason);
+
+  async function handleAssign(nextAssigneeId: string) {
+    const payload = nextAssigneeId
+      ? {
+          assigneeId: nextAssigneeId,
+          status: task.status === 'backlog' || task.status === 'ready' ? 'assigned' as TaskStatus : task.status,
+          expectedVersion: task.version,
+        }
+      : {
+          assigneeId: undefined,
+          expectedVersion: task.version,
+        };
+    const patched = await patchTask(task.id, payload);
+    onPatch(patched);
+  }
   return (
     <article
       draggable
@@ -227,6 +243,19 @@ function TaskCard({ task, agents, channels, onStatus, onDelete, compact = false 
         {claimedBy ? <span style={{ fontWeight: 700 }}>CLAIMED: @{claimedBy.displayName ?? claimedBy.name}</span> : null}
         {reviewer ? <span>REVIEW: @{reviewer.displayName ?? reviewer.name}</span> : null}
         {task.context?.goalObjective ? <span style={{ fontWeight: 700 }}>GOAL: {task.context.goalObjective}</span> : null}
+      </div>
+      <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
+        <span style={{ fontSize: 11, fontWeight: 700 }}>ASSIGN</span>
+        <select
+          value={task.assigneeId ?? ''}
+          onChange={(event) => void handleAssign(event.target.value)}
+          style={{ ...selectStyle, fontSize: 11, minWidth: 132, padding: '3px 6px' }}
+        >
+          <option value="">unassigned</option>
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>{agent.displayName ?? agent.name}</option>
+          ))}
+        </select>
       </div>
       {blocked ? (
         <div style={{ marginTop: 8, border: '2px solid #9f1239', background: '#ffe4ec', padding: 7, fontSize: 11, lineHeight: 1.35 }}>
@@ -279,6 +308,7 @@ function TaskCard({ task, agents, channels, onStatus, onDelete, compact = false 
     </article>
   );
 }
+
 
 function ColumnHeader({ column, count, collapsed, filter, onFilter, onToggle }: {
   column: (typeof COLUMNS)[number];

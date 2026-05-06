@@ -1,16 +1,28 @@
 import { useState, useRef } from 'react';
-import type { Agent } from '../api.js';
+import type { Agent, DeliveryBehavior } from '../api.js';
 import { t } from '../i18n.js';
 
 type Props = {
   agents: Agent[];
   channelName?: string;
   content?: string;
+  sendBehavior: DeliveryBehavior;
+  onSendBehaviorChange: (behavior: DeliveryBehavior) => void;
+  queueStateByAgent: Record<string, { depth: number; processing: boolean }>;
   onChange?: (content: string) => void;
   onSend: (content: string, agentId?: string) => void | Promise<void>;
 };
 
-export function Composer({ agents, channelName, content, onChange, onSend }: Props) {
+export function Composer({
+  agents,
+  channelName,
+  content,
+  sendBehavior,
+  onSendBehaviorChange,
+  queueStateByAgent,
+  onChange,
+  onSend,
+}: Props) {
   const [internalContent, setInternalContent] = useState('');
   const [selectedAgent, setSelectedAgent] = useState('');
   const [pressing, setPressing] = useState(false);
@@ -87,6 +99,9 @@ export function Composer({ agents, channelName, content, onChange, onSend }: Pro
   };
 
   const runningAgents = agents.filter((a) => ['running', 'idle', 'working'].includes(a.status));
+  const selectedAgentStatus = selectedAgent ? agents.find((agent) => agent.id === selectedAgent)?.status : undefined;
+  const selectedQueueState = selectedAgent ? queueStateByAgent[selectedAgent] : undefined;
+  const willQueueOnSend = Boolean(selectedAgent && sendBehavior === 'queue' && isAgentBusyStatus(selectedAgentStatus));
   const canSend = value.trim().length > 0 && !sending;
 
   return (
@@ -126,11 +141,44 @@ export function Composer({ agents, channelName, content, onChange, onSend }: Pro
           >
             <option value="">[ BROADCAST ]</option>
             {runningAgents.map((a) => (
-              <option key={a.id} value={a.id}>@{a.displayName ?? a.name}</option>
+              <option key={a.id} value={a.id}>
+                @{a.displayName ?? a.name}
+                {queueStateByAgent[a.id]?.depth ? ` (Q${queueStateByAgent[a.id]?.depth})` : ''}
+              </option>
             ))}
           </select>
+          <div style={{ display: 'inline-flex', marginLeft: 'auto', border: '1.5px solid #111' }}>
+            <button
+              type="button"
+              onClick={() => onSendBehaviorChange('interrupt')}
+              style={sendBehaviorToggleStyle(sendBehavior === 'interrupt')}
+            >
+              INTERRUPT
+            </button>
+            <button
+              type="button"
+              onClick={() => onSendBehaviorChange('queue')}
+              style={sendBehaviorToggleStyle(sendBehavior === 'queue')}
+            >
+              QUEUE
+            </button>
+          </div>
         </div>
       )}
+      {selectedAgent && selectedQueueState ? (
+        <div style={{
+          marginBottom: 6,
+          border: '1.5px solid #111',
+          background: '#f5f5f5',
+          color: '#111',
+          fontSize: 10,
+          fontWeight: 700,
+          padding: '4px 6px',
+          lineHeight: 1.35,
+        }}>
+          Queue @{agents.find((agent) => agent.id === selectedAgent)?.displayName ?? selectedAgent}: {selectedQueueState.depth} pending{selectedQueueState.processing ? ', dispatching' : ''}
+        </div>
+      ) : null}
 
       {/* Input row */}
       <div className="composer-input-row" style={{ display: 'flex', gap: 8, alignItems: 'flex-end', position: 'relative' }}>
@@ -232,7 +280,7 @@ export function Composer({ agents, channelName, content, onChange, onSend }: Pro
             alignSelf: 'stretch',
           }}
         >
-          {t('composer.send')} ▶
+          {willQueueOnSend ? 'QUEUE ▶' : `${t('composer.send')} ▶`}
         </button>
       </div>
     </div>
@@ -240,6 +288,7 @@ export function Composer({ agents, channelName, content, onChange, onSend }: Pro
 }
 
 const ONLINE_STATUSES = new Set(['running', 'idle', 'working']);
+const BUSY_STATUSES = new Set(['running', 'working', 'starting']);
 
 function mentionOptions(agents: Agent[]): Array<{ type: 'agent' | 'user'; id: string; label: string; online: boolean }> {
   return [
@@ -251,4 +300,23 @@ function mentionOptions(agents: Agent[]): Array<{ type: 'agent' | 'user'; id: st
       online: ONLINE_STATUSES.has(agent.status),
     })),
   ];
+}
+
+function sendBehaviorToggleStyle(active: boolean): React.CSSProperties {
+  return {
+    border: 'none',
+    borderRight: active ? 'none' : '1px solid #111',
+    background: active ? '#111' : '#fff',
+    color: active ? '#FFD700' : '#111',
+    padding: '3px 8px',
+    fontFamily: "'Courier New', monospace",
+    fontSize: 10,
+    fontWeight: 700,
+    cursor: 'pointer',
+  };
+}
+
+function isAgentBusyStatus(status: string | undefined): boolean {
+  if (!status) return false;
+  return BUSY_STATUSES.has(status);
 }

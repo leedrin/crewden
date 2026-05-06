@@ -84,6 +84,7 @@ export class PaseoRuntimeService {
     seq: number;
     channelId: string;
     message: AgentDelivery;
+    deliveryBehavior?: 'interrupt' | 'queue';
     inboxSummary?: string;
   }): Promise<boolean> {
     try {
@@ -92,6 +93,7 @@ export class PaseoRuntimeService {
         seq: params.seq,
         channelId: params.channelId,
         message: params.message,
+        deliveryBehavior: params.deliveryBehavior,
         inboxSummary: params.inboxSummary,
       });
     } catch {

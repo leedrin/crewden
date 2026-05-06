@@ -12,13 +12,18 @@ import { GoalAlignmentPanel } from './components/GoalAlignmentPanel.js';
 import { KnowledgePanel } from './components/KnowledgePanel.js';
 import { MobileTopBar } from './components/MobileTopBar.js';
 import { LoginView } from './components/LoginView.js';
-import type { Channel, Message, MessageThread, Agent, Machine, AgentActivity, VersionInfo, Task, Reminder, SearchMessageResult, GoalBrief, GoalAlignment, RuntimeStatus, Project } from './api.js';
+import type { Channel, Message, MessageThread, Agent, Machine, AgentActivity, VersionInfo, Task, Reminder, SearchMessageResult, GoalBrief, GoalAlignment, RuntimeStatus, Project, DeliveryBehavior } from './api.js';
 import { AuthError, WEB_COMMIT_SHA, WEB_VERSION, buildWsUrl, getProjects, getChannels, getMessages, getMessageThread, sendMessage, getAgents, getMachines, getAgentActivities, getHubVersion, getTasks, messageToTask, startGoalAlignment, getAgentReminders, createChannel, deleteChannel, searchMessages, setAuthFailureHandler, verifyAuthToken, getRuntimeStatus, reopenThread, resolveThread } from './api.js';
 import { clearStoredAuthToken, getEffectiveAuthToken, markSignedOut, setStoredAuthToken } from './auth.js';
 import { notifyBrowser, requestPermission } from './notifications.js';
 
 const LAST_PAGE_KEY = 'crewden_last_page';
 const LAST_PROJECT_ID_KEY = 'crewden_last_project_id';
+const SEND_BEHAVIOR_KEY = 'crewden_send_behavior';
+const LEFT_SIDEBAR_WIDTH_KEY = 'crewden_left_sidebar_width';
+const RIGHT_SIDEBAR_WIDTH_KEY = 'crewden_right_sidebar_width';
+const LEFT_SIDEBAR_HIDDEN_KEY = 'crewden_left_sidebar_hidden';
+const RIGHT_SIDEBAR_HIDDEN_KEY = 'crewden_right_sidebar_hidden';
 
 type MainView = 'channel' | 'tasks' | 'knowledge' | 'inbox';
 type StoredPage = {
@@ -57,8 +62,23 @@ export function App() {
   const [targetMessageId, setTargetMessageId] = useState<string | undefined>();
   const [threadTargetMessageId, setThreadTargetMessageId] = useState<string | undefined>();
   const [searchOpen, setSearchOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState<boolean>(() => isDesktopViewport());
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(() => readStoredNumber(LEFT_SIDEBAR_WIDTH_KEY, 240, 200, 420));
+  const [rightSidebarWidth, setRightSidebarWidth] = useState<number>(() => readStoredNumber(RIGHT_SIDEBAR_WIDTH_KEY, 360, 280, 620));
+  const [leftSidebarHidden, setLeftSidebarHidden] = useState<boolean>(() => readStoredBoolean(LEFT_SIDEBAR_HIDDEN_KEY, false));
+  const [rightSidebarHidden, setRightSidebarHidden] = useState<boolean>(() => readStoredBoolean(RIGHT_SIDEBAR_HIDDEN_KEY, false));
+  const [sendBehavior, setSendBehavior] = useState<DeliveryBehavior>(() => {
+    const stored = localStorage.getItem(SEND_BEHAVIOR_KEY);
+    return stored === 'queue' ? 'queue' : 'interrupt';
+  });
+  const [queueStateByAgent, setQueueStateByAgent] = useState<Record<string, { depth: number; processing: boolean }>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const selectedChannelRef = useRef(selectedChannel);
+  const resizeRef = useRef<{
+    side: 'left' | 'right';
+    startX: number;
+    startWidth: number;
+  } | null>(null);
   const isAuthenticated = authState === 'authenticated';
 
   const resetWorkspaceState = useCallback(() => {
@@ -218,6 +238,60 @@ export function App() {
   }, [isAuthenticated, rightPanel, selectedAgentId, selectedChannel, selectedView]);
 
   useEffect(() => {
+    localStorage.setItem(SEND_BEHAVIOR_KEY, sendBehavior);
+  }, [sendBehavior]);
+
+  useEffect(() => {
+    const media = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(min-width: 1024px)')
+      : undefined;
+    if (!media) return;
+    const apply = () => setIsDesktop(media.matches);
+    apply();
+    media.addEventListener('change', apply);
+    return () => media.removeEventListener('change', apply);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(LEFT_SIDEBAR_WIDTH_KEY, String(leftSidebarWidth));
+  }, [leftSidebarWidth]);
+
+  useEffect(() => {
+    localStorage.setItem(RIGHT_SIDEBAR_WIDTH_KEY, String(rightSidebarWidth));
+  }, [rightSidebarWidth]);
+
+  useEffect(() => {
+    localStorage.setItem(LEFT_SIDEBAR_HIDDEN_KEY, leftSidebarHidden ? '1' : '0');
+  }, [leftSidebarHidden]);
+
+  useEffect(() => {
+    localStorage.setItem(RIGHT_SIDEBAR_HIDDEN_KEY, rightSidebarHidden ? '1' : '0');
+  }, [rightSidebarHidden]);
+
+  useEffect(() => {
+    const onMouseMove = (event: MouseEvent) => {
+      const resize = resizeRef.current;
+      if (!resize) return;
+      if (resize.side === 'left') {
+        const delta = event.clientX - resize.startX;
+        setLeftSidebarWidth(clamp(resize.startWidth + delta, 200, 420));
+      } else {
+        const delta = resize.startX - event.clientX;
+        setRightSidebarWidth(clamp(resize.startWidth + delta, 280, 620));
+      }
+    };
+    const onMouseUp = () => {
+      resizeRef.current = null;
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!isAuthenticated) return;
     localStorage.setItem(LAST_PROJECT_ID_KEY, selectedProjectId);
     const selectedProject = projects.find((project) => project.id === selectedProjectId);
@@ -331,8 +405,12 @@ export function App() {
             const replies = current.replies.some((reply) => reply.id === msg.message.id)
               ? current.replies.map((reply) => (reply.id === msg.message.id ? msg.message : reply))
               : [...current.replies, msg.message];
-            return { root: msg.root, replies };
+            return { ...current, root: msg.root, replies };
           });
+          void (async () => {
+            const fullThread = await getMessageThread(msg.root.id);
+            setThread((current) => current?.root.id === msg.root.id ? fullThread : current);
+          })().catch(() => undefined);
           const replySender: string = msg.message.senderName ?? msg.message.agentId ?? 'Someone';
           notifyBrowser(
             `${replySender} replied in thread`,
@@ -364,6 +442,10 @@ export function App() {
             return { ...prev, [msg.agentId]: [msg.activity, ...current].slice(0, 200) };
           });
           const detail: string = msg.activity.detail ?? '';
+          const queueState = parseQueueState(detail);
+          if (queueState) {
+            setQueueStateByAgent((prev) => ({ ...prev, [msg.agentId]: queueState }));
+          }
           if (detail.startsWith('permission:requested') || detail.startsWith('permission:resolved') || detail.startsWith('attention:permission')) {
             loadRuntimeStatus();
           }
@@ -454,7 +536,7 @@ export function App() {
 
   const handleSend = async (content: string, agentId?: string) => {
     const channelId = selectedChannel;
-    const message = await sendMessage(channelId, 'user', content, agentId);
+    const message = await sendMessage(channelId, 'user', content, agentId, undefined, sendBehavior);
     setDraftsByChannel((prev) => {
       if (!prev[channelId]) return prev;
       const { [channelId]: _sentDraft, ...rest } = prev;
@@ -468,6 +550,7 @@ export function App() {
     if (!message.threadRootId) {
       setThread((current) => current?.root.id === rootId ? current : { root: message, replies: [] });
     }
+    setRightSidebarHidden(false);
     setThreadTargetMessageId(undefined);
     setRightPanel(undefined);
     setSelectedAgentId(undefined);
@@ -477,6 +560,7 @@ export function App() {
   };
 
   const handleOpenAgent = (agentId: string) => {
+    setRightSidebarHidden(false);
     setSelectedView('channel');
     setSelectedAgentId(agentId);
     setThread(undefined);
@@ -488,7 +572,7 @@ export function App() {
 
   const handleThreadSend = async (content: string, agentId?: string) => {
     if (!thread) return;
-    const reply = await sendMessage(thread.root.channelId, 'user', content, agentId, thread.root.id);
+    const reply = await sendMessage(thread.root.channelId, 'user', content, agentId, thread.root.id, sendBehavior);
     const nextRoot = {
       ...thread.root,
       replyCount: (thread.root.replyCount ?? thread.replies.length) + 1,
@@ -524,6 +608,7 @@ export function App() {
 
   const handleMessageToGoal = async (messageId: string) => {
     const alignment = await startGoalAlignment(messageId, { requesterName: 'user' });
+    setRightSidebarHidden(false);
     setGoalAlignment(alignment);
     setThread(await getMessageThread(alignment.threadRootId));
     setGoalDraft(undefined);
@@ -557,6 +642,97 @@ export function App() {
     : selectedAgent
       ? selectedAgent.displayName ?? selectedAgent.name
       : `# ${selectedChannelObj?.name ?? selectedChannel}`;
+  const rightPaneContent = goalAlignment ? (
+    <GoalAlignmentPanel
+      alignment={goalAlignment}
+      agents={agents}
+      onClose={() => setGoalAlignment(undefined)}
+      onAlignmentUpdated={setGoalAlignment}
+      onTasksCreated={(createdTasks) => {
+        for (const task of createdTasks) upsertTask(task);
+        setSelectedView('tasks');
+      }}
+    />
+  ) : goalDraft ? (
+    <GoalDraftPanel
+      goal={goalDraft}
+      agents={agents}
+      onClose={() => setGoalDraft(undefined)}
+      onGoalUpdated={setGoalDraft}
+      onTasksCreated={(createdTasks) => {
+        for (const task of createdTasks) upsertTask(task);
+        setSelectedView('tasks');
+      }}
+    />
+  ) : thread ? (
+    <ThreadPanel
+      root={thread.root}
+      replies={thread.replies}
+      status={thread.status}
+      summaryContent={thread.summaryContent}
+      summaryGeneratedAt={thread.summaryGeneratedAt}
+      linkedDecisions={thread.linkedDecisions}
+      linkedDocuments={thread.linkedDocuments}
+      agents={agents}
+      sendBehavior={sendBehavior}
+      onSendBehaviorChange={setSendBehavior}
+      queueStateByAgent={queueStateByAgent}
+      activitiesByAgent={activitiesByAgent}
+      targetMessageId={threadTargetMessageId}
+      onClose={() => setRightSidebarHidden(true)}
+      onSend={handleThreadSend}
+      onResolve={async () => {
+        const updated = await resolveThread(thread.root.id);
+        setThread(updated);
+        updateThreadRoot(updated.root);
+      }}
+      onReopen={async () => {
+        const updated = await reopenThread(thread.root.id);
+        setThread(updated);
+        updateThreadRoot(updated.root);
+      }}
+      onOpenAgent={handleOpenAgent}
+      onTargetMessageSettled={() => setThreadTargetMessageId(undefined)}
+    />
+  ) : selectedAgent ? (
+    <AgentDetailPanel
+      agent={selectedAgent}
+      agents={agents}
+      machines={machines}
+      activities={activitiesByAgent[selectedAgent.id] ?? []}
+      reminders={remindersByAgent[selectedAgent.id] ?? []}
+      tasks={tasks}
+      onReminderUpdated={upsertReminder}
+      onAgentUpdated={(updated) => setAgents((prev) => prev.map((agent) => (agent.id === updated.id ? updated : agent)))}
+      onAgentDeleted={(agentId) => {
+        setAgents((prev) => prev.filter((agent) => agent.id !== agentId));
+        setActivitiesByAgent((prev) => omitKey(prev, agentId));
+        setRemindersByAgent((prev) => omitKey(prev, agentId));
+        setSelectedAgentId(undefined);
+      }}
+      onClose={() => setRightSidebarHidden(true)}
+    />
+  ) : rightPanel === 'agents' ? (
+    <AgentPanel
+      projectId={selectedProjectId}
+      agents={agents}
+      machines={machines}
+      runtimeStatus={runtimeStatus}
+      onAgentsChange={loadAgents}
+      onRuntimeStatusRefresh={loadRuntimeStatus}
+      onClose={() => setRightSidebarHidden(true)}
+    />
+  ) : null;
+  const hasRightPane = Boolean(rightPaneContent);
+  const startResize = (side: 'left' | 'right') => (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDesktop) return;
+    resizeRef.current = {
+      side,
+      startX: event.clientX,
+      startWidth: side === 'left' ? leftSidebarWidth : rightSidebarWidth,
+    };
+    event.preventDefault();
+  };
 
   if (authState === 'checking') {
     return <div className="login-shell"><div className="login-card">Loading...</div></div>;
@@ -572,6 +748,7 @@ export function App() {
     setSearchOpen(false);
     setSelectedAgentId(undefined);
     if (result.threadRootId) {
+      setRightSidebarHidden(false);
       setThread(await getMessageThread(result.threadRootId));
       setThreadTargetMessageId(result.id);
       setTargetMessageId(undefined);
@@ -589,58 +766,128 @@ export function App() {
         subtitle={thread ? 'Thread' : selectedView === 'tasks' ? `${tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled').length} open` : selectedView === 'inbox' ? 'Aggregated work' : selectedView === 'knowledge' ? 'Memory layer' : 'Workspace'}
         hasThread={!!thread}
         onOpenMenu={() => setSidebarOpen(true)}
-        onOpenAgents={() => { setRightPanel('agents'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
+        onOpenAgents={() => { setRightPanel('agents'); setRightSidebarHidden(false); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
         onCloseThread={() => { setThread(undefined); setThreadTargetMessageId(undefined); }}
       />
       {sidebarOpen ? <button type="button" className="mobile-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} /> : null}
-      <Sidebar
-        className={sidebarOpen ? 'sidebar-mobile-open' : ''}
-        projects={projects}
-        selectedProjectId={selectedProjectId}
-        channels={channels}
-        agents={agents}
-        activitiesByAgent={activitiesByAgent}
-        machines={machines}
-        runtimeStatus={runtimeStatus}
-        selectedView={selectedView}
-        selectedChannel={selectedChannel}
-        selectedAgentId={selectedAgentId}
-        webVersion={{ component: 'web', version: WEB_VERSION, commit: WEB_COMMIT_SHA || undefined }}
-        hubVersion={hubVersion}
-        taskCount={tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled').length}
-        inboxCount={tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled' && (task.isBlocked || task.status === 'in_review' || task.status === 'changes_requested' || task.status === 'qa' || Boolean(task.assigneeId))).length}
-        onSelectInbox={() => { setSelectedView('inbox'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
-        onSelectTasks={() => { setSelectedView('tasks'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
-        onSelectKnowledge={() => { setSelectedView('knowledge'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
-        onOpenSearch={() => setSearchOpen(true)}
-        onSelectProject={(projectId) => {
-          setSelectedProjectId(projectId);
-          setSelectedView('channel');
-          setThread(undefined);
-          setThreadTargetMessageId(undefined);
-          setTargetMessageId(undefined);
-          setSelectedAgentId(undefined);
-          setGoalDraft(undefined);
-          setGoalAlignment(undefined);
-          setRightPanel(undefined);
-        }}
-        onSelectChannel={(id) => {
-          setSelectedView('channel');
-          setSelectedChannel(id);
-          setSelectedAgentId(undefined);
-          setThread(undefined);
-          setGoalDraft(undefined);
-          setGoalAlignment(undefined);
-          setTargetMessageId(undefined);
-          setThreadTargetMessageId(undefined);
-        }}
-        onCreateChannel={handleCreateChannel}
-        onDeleteChannel={handleDeleteChannel}
-        onSelectAgent={handleOpenAgent}
-        onOpenAgents={() => { setRightPanel((current) => current === 'agents' ? undefined : 'agents'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalDraft(undefined); setGoalAlignment(undefined); }}
-        onNavigate={() => setSidebarOpen(false)}
-        onSignOut={handleSignOut}
-      />
+      {isDesktop ? (
+        <>
+          {!leftSidebarHidden ? (
+            <>
+              <div style={{ width: leftSidebarWidth, minWidth: 180, maxWidth: 420, flexShrink: 0, minHeight: 0 }}>
+                <Sidebar
+                  className={sidebarOpen ? 'sidebar-mobile-open' : ''}
+                  projects={projects}
+                  selectedProjectId={selectedProjectId}
+                  channels={channels}
+                  agents={agents}
+                  activitiesByAgent={activitiesByAgent}
+                  machines={machines}
+                  runtimeStatus={runtimeStatus}
+                  selectedView={selectedView}
+                  selectedChannel={selectedChannel}
+                  selectedAgentId={selectedAgentId}
+                  webVersion={{ component: 'web', version: WEB_VERSION, commit: WEB_COMMIT_SHA || undefined }}
+                  hubVersion={hubVersion}
+                  taskCount={tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled').length}
+                  inboxCount={tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled' && (task.isBlocked || task.status === 'in_review' || task.status === 'changes_requested' || task.status === 'qa' || Boolean(task.assigneeId))).length}
+                  onSelectInbox={() => { setSelectedView('inbox'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
+                  onSelectTasks={() => { setSelectedView('tasks'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
+                  onSelectKnowledge={() => { setSelectedView('knowledge'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
+                  onOpenSearch={() => setSearchOpen(true)}
+                  onSelectProject={(projectId) => {
+                    setSelectedProjectId(projectId);
+                    setSelectedView('channel');
+                    setThread(undefined);
+                    setThreadTargetMessageId(undefined);
+                    setTargetMessageId(undefined);
+                    setSelectedAgentId(undefined);
+                    setGoalDraft(undefined);
+                    setGoalAlignment(undefined);
+                    setRightPanel(undefined);
+                  }}
+                  onSelectChannel={(id) => {
+                    setSelectedView('channel');
+                    setSelectedChannel(id);
+                    setSelectedAgentId(undefined);
+                    setThread(undefined);
+                    setGoalDraft(undefined);
+                    setGoalAlignment(undefined);
+                    setTargetMessageId(undefined);
+                    setThreadTargetMessageId(undefined);
+                  }}
+                  onCreateChannel={handleCreateChannel}
+                  onDeleteChannel={handleDeleteChannel}
+                  onSelectAgent={handleOpenAgent}
+                  onOpenAgents={() => { setRightPanel((current) => current === 'agents' ? undefined : 'agents'); setRightSidebarHidden(false); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalDraft(undefined); setGoalAlignment(undefined); }}
+                  onToggleSidebar={() => setLeftSidebarHidden((current) => !current)}
+                  onSignOut={handleSignOut}
+                />
+              </div>
+              <div className="pane-resize-handle pane-resize-handle-left" onMouseDown={startResize('left')} />
+            </>
+          ) : (
+            <button
+              className="side-toggle side-toggle-left"
+              onClick={() => setLeftSidebarHidden(false)}
+              title="Show sidebar"
+              aria-label="Show sidebar"
+            >
+              ▶ NAV
+            </button>
+          )}
+        </>
+      ) : (
+        <Sidebar
+          className={sidebarOpen ? 'sidebar-mobile-open' : ''}
+          projects={projects}
+          selectedProjectId={selectedProjectId}
+          channels={channels}
+          agents={agents}
+          activitiesByAgent={activitiesByAgent}
+          machines={machines}
+          runtimeStatus={runtimeStatus}
+          selectedView={selectedView}
+          selectedChannel={selectedChannel}
+          selectedAgentId={selectedAgentId}
+          webVersion={{ component: 'web', version: WEB_VERSION, commit: WEB_COMMIT_SHA || undefined }}
+          hubVersion={hubVersion}
+          taskCount={tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled').length}
+          inboxCount={tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled' && (task.isBlocked || task.status === 'in_review' || task.status === 'changes_requested' || task.status === 'qa' || Boolean(task.assigneeId))).length}
+          onSelectInbox={() => { setSelectedView('inbox'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
+          onSelectTasks={() => { setSelectedView('tasks'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
+          onSelectKnowledge={() => { setSelectedView('knowledge'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
+          onOpenSearch={() => setSearchOpen(true)}
+          onSelectProject={(projectId) => {
+            setSelectedProjectId(projectId);
+            setSelectedView('channel');
+            setThread(undefined);
+            setThreadTargetMessageId(undefined);
+            setTargetMessageId(undefined);
+            setSelectedAgentId(undefined);
+            setGoalDraft(undefined);
+            setGoalAlignment(undefined);
+            setRightPanel(undefined);
+          }}
+          onSelectChannel={(id) => {
+            setSelectedView('channel');
+            setSelectedChannel(id);
+            setSelectedAgentId(undefined);
+            setThread(undefined);
+            setGoalDraft(undefined);
+            setGoalAlignment(undefined);
+            setTargetMessageId(undefined);
+            setThreadTargetMessageId(undefined);
+          }}
+          onCreateChannel={handleCreateChannel}
+          onDeleteChannel={handleDeleteChannel}
+          onSelectAgent={handleOpenAgent}
+          onOpenAgents={() => { setRightPanel((current) => current === 'agents' ? undefined : 'agents'); setRightSidebarHidden(false); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalDraft(undefined); setGoalAlignment(undefined); }}
+          onToggleSidebar={() => setLeftSidebarHidden((current) => !current)}
+          onNavigate={() => setSidebarOpen(false)}
+          onSignOut={handleSignOut}
+        />
+      )}
       <div className="main-pane" style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
         {selectedView === 'inbox' ? (
           <InboxPanel tasks={tasks} channels={channels} agents={agents} />
@@ -673,6 +920,9 @@ export function App() {
             <Composer
               agents={agents}
               channelName={selectedChannelObj?.name ?? selectedChannel}
+              sendBehavior={sendBehavior}
+              onSendBehaviorChange={setSendBehavior}
+              queueStateByAgent={queueStateByAgent}
               content={draftsByChannel[selectedChannel] ?? ''}
               onChange={(content) => {
                 setDraftsByChannel((prev) => content ? { ...prev, [selectedChannel]: content } : omitKey(prev, selectedChannel));
@@ -682,92 +932,49 @@ export function App() {
           </>
         )}
       </div>
-      {goalAlignment ? (
-        <GoalAlignmentPanel
-          alignment={goalAlignment}
-          agents={agents}
-          onClose={() => setGoalAlignment(undefined)}
-          onAlignmentUpdated={setGoalAlignment}
-          onTasksCreated={(createdTasks) => {
-            for (const task of createdTasks) upsertTask(task);
-            setSelectedView('tasks');
-          }}
-        />
-      ) : goalDraft ? (
-        <GoalDraftPanel
-          goal={goalDraft}
-          agents={agents}
-          onClose={() => setGoalDraft(undefined)}
-          onGoalUpdated={setGoalDraft}
-          onTasksCreated={(createdTasks) => {
-            for (const task of createdTasks) upsertTask(task);
-            setSelectedView('tasks');
-          }}
-        />
-      ) : thread ? (
-        <ThreadPanel
-          root={thread.root}
-          replies={thread.replies}
-          status={thread.status}
-          summaryContent={thread.summaryContent}
-          summaryGeneratedAt={thread.summaryGeneratedAt}
-          linkedDecisions={thread.linkedDecisions}
-          linkedDocuments={thread.linkedDocuments}
-          agents={agents}
-          activitiesByAgent={activitiesByAgent}
-          targetMessageId={threadTargetMessageId}
-          onClose={() => { setThread(undefined); setThreadTargetMessageId(undefined); }}
-          onSend={handleThreadSend}
-          onResolve={async () => {
-            const updated = await resolveThread(thread.root.id);
-            setThread(updated);
-            updateThreadRoot(updated.root);
-          }}
-          onReopen={async () => {
-            const updated = await reopenThread(thread.root.id);
-            setThread(updated);
-            updateThreadRoot(updated.root);
-          }}
-          onOpenAgent={handleOpenAgent}
-          onTargetMessageSettled={() => setThreadTargetMessageId(undefined)}
-        />
-      ) : selectedAgent ? (
-        <AgentDetailPanel
-          agent={selectedAgent}
-          agents={agents}
-          machines={machines}
-          activities={activitiesByAgent[selectedAgent.id] ?? []}
-          reminders={remindersByAgent[selectedAgent.id] ?? []}
-          tasks={tasks}
-          onReminderUpdated={upsertReminder}
-          onAgentUpdated={(updated) => setAgents((prev) => prev.map((agent) => (agent.id === updated.id ? updated : agent)))}
-          onAgentDeleted={(agentId) => {
-            setAgents((prev) => prev.filter((agent) => agent.id !== agentId));
-            setActivitiesByAgent((prev) => omitKey(prev, agentId));
-            setRemindersByAgent((prev) => omitKey(prev, agentId));
-            setSelectedAgentId(undefined);
-          }}
-          onClose={() => setSelectedAgentId(undefined)}
-        />
-      ) : rightPanel === 'agents' ? (
-        <AgentPanel
-          projectId={selectedProjectId}
-          agents={agents}
-          machines={machines}
-          runtimeStatus={runtimeStatus}
-          onAgentsChange={loadAgents}
-          onRuntimeStatusRefresh={loadRuntimeStatus}
-          onClose={() => setRightPanel(undefined)}
-        />
+      {isDesktop ? (
+        <>
+          {hasRightPane ? (
+            rightSidebarHidden ? (
+              <button
+                className="side-toggle side-toggle-right"
+                onClick={() => setRightSidebarHidden(false)}
+                title="Show details panel"
+                aria-label="Show details panel"
+              >
+                THREAD ◀
+              </button>
+            ) : (
+              <>
+                <div className="pane-resize-handle pane-resize-handle-right" onMouseDown={startResize('right')} />
+                <div style={{ width: rightSidebarWidth, minWidth: 260, maxWidth: 620, flexShrink: 0, minHeight: 0, display: 'flex' }}>
+                  {rightPaneContent}
+                </div>
+              </>
+            )
+          ) : (
+            <button
+              className="right-rail-trigger"
+              onClick={() => { setRightPanel('agents'); setRightSidebarHidden(false); }}
+              title="Open agents"
+              aria-label="Open agents"
+            >
+              AGENTS
+            </button>
+          )}
+          
+        </>
       ) : (
-        <button
-          className="right-rail-trigger"
-          onClick={() => setRightPanel('agents')}
-          title="Open agents"
-          aria-label="Open agents"
-        >
-          AGENTS
-        </button>
+        hasRightPane ? rightPaneContent : (
+          <button
+            className="right-rail-trigger"
+            onClick={() => { setRightPanel('agents'); setRightSidebarHidden(false); }}
+            title="Open agents"
+            aria-label="Open agents"
+          >
+            AGENTS
+          </button>
+        )
       )}
       {searchOpen ? (
         <SearchOverlay
@@ -840,6 +1047,42 @@ function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
   if (!(key in record)) return record;
   const { [key]: _removed, ...rest } = record;
   return rest;
+}
+
+function parseQueueState(detail: string): { depth: number; processing: boolean } | undefined {
+  const matched = detail.match(/^queue:depth:(\d+);processing:(0|1)$/);
+  if (!matched) return undefined;
+  return {
+    depth: Number(matched[1]),
+    processing: matched[2] === '1',
+  };
+}
+
+function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
+  const raw = window.localStorage.getItem(key);
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  return clamp(parsed, min, max);
+}
+
+function readStoredBoolean(key: string, fallback: boolean): boolean {
+  const raw = window.localStorage.getItem(key);
+  if (raw === '1') return true;
+  if (raw === '0') return false;
+  return fallback;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function isDesktopViewport(): boolean {
+  if (typeof window === 'undefined') return true;
+  if (typeof window.matchMedia !== 'function') {
+    return window.innerWidth >= 1024;
+  }
+  return window.matchMedia('(min-width: 1024px)').matches;
 }
 
 function readLastPage(): StoredPage {

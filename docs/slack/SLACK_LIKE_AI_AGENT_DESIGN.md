@@ -1,8 +1,8 @@
 # 面向 AI Agent 的协作式研发操作系统 —— 完整设计方案
 
 > 基于「Slack-like 面向 AI Agent 的协作式研发操作系统方案」终极规划，
-> 融合 agencycli / Hermes Kanban / Multica 三个项目的设计精华，
-> 在 Paseo × Crewden 整合基础上重新设计。
+> 参考 agencycli / Hermes Kanban / Multica 等项目的设计经验，
+> 在 Paseo × Crewden 整合基础上自主设计。
 >
 > 日期：2026-05-04
 
@@ -677,7 +677,7 @@ Thread Summary 格式：
 
 ---
 
-## 九、融合实施路线图（基于 7 层架构）
+## 九、实施路线图（基于 7 层架构）
 
 ### Phase 1：地基（P0）—— L1+L4b+L6
 
@@ -688,7 +688,7 @@ L1: 协作层 MVP
 
 L4b: Task Engine
   → Task 状态机升级（backlog → spec_needed → ready → ... → done）
-  → 借鉴 Hermes：spec_needed 细分状态 + 5 列看板映射 + 严格状态转换 + dependency graph
+  → 参考 Hermes 设计：spec_needed 细分状态 + 5 列看板映射 + 严格状态转换 + dependency graph
   → Task as Execution Contract 模型落地
 
 L6: Audit

@@ -27,7 +27,7 @@ describe('App', () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText('Workspace')).toBeTruthy();
+      expect(screen.getAllByText('Workspace').length).toBeGreaterThan(0);
     });
 
     expect(screen.queryByText('+ NEW')).toBeNull();
@@ -43,7 +43,7 @@ describe('App', () => {
     const { container } = render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText('Workspace')).toBeTruthy();
+      expect(screen.getAllByText('Workspace').length).toBeGreaterThan(0);
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
@@ -167,7 +167,7 @@ describe('App', () => {
     fireEvent.click(screen.getByText(/Send/));
 
     await waitFor(() => {
-      expect(api.sendMessage).toHaveBeenCalledWith('random', 'user', 'random draft', undefined);
+      expect(api.sendMessage).toHaveBeenCalledWith('random', 'user', 'random draft', undefined, undefined, 'interrupt');
       expect(screen.getByPlaceholderText('Message #random')).toHaveValue('');
     });
 

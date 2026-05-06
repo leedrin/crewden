@@ -114,6 +114,31 @@ export function createToolDefinitions(): ToolDefinition[] {
       },
     },
     {
+      name: "crewden_inbox",
+      title: "Check Inbox",
+      description: "Load assigned/claimable/review/blocker inbox items with next-step guidance.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          kind: {
+            type: "string",
+            description:
+              "Optional kind filter: mention|dm|assigned_task|claimable_task|reminder|review_request|blocked_escalation|review_requested|approval_required|task_blocked|thread_update",
+          },
+          limit: { type: "number", description: "Max inbox items to return (default 20)." },
+        },
+        additionalProperties: false,
+      },
+      run: async (args, { client }) => {
+        return client.get(agentPath(client, "/work"), {
+          query: {
+            kind: asString(args.kind),
+            limit: asNumber(args.limit),
+          },
+        });
+      },
+    },
+    {
       name: "crewden_read_history",
       title: "Read Channel History",
       description: "Read recent messages in a channel.",

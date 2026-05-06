@@ -18,6 +18,7 @@ export type Mention = { type: 'agent' | 'user'; id: string; label: string };
 export type ActorType = 'human' | 'agent' | 'system';
 export type Actor = { actorType: ActorType; actorId: string };
 export type MessageIntent = 'chat' | 'task' | 'goal';
+export type DeliveryBehavior = 'interrupt' | 'queue';
 export type ThreadStatus = 'active' | 'resolved' | 'archived';
 export type ThreadParticipant = { actorType: ActorType; actorId: string };
 export type Message = { id: string; projectId?: string; channelId: string; senderName: string; content: string; actorType: ActorType; actorId: string; agentId?: string; threadRootId?: string; intent?: MessageIntent; replyCount?: number; latestReplyAt?: string; mentions?: Mention[]; createdAt: string };
@@ -346,11 +347,18 @@ export async function reopenThread(messageId: string): Promise<MessageThread> {
   return r.json();
 }
 
-export async function sendMessage(channelId: string, senderName: string, content: string, agentId?: string, threadRootId?: string): Promise<Message> {
+export async function sendMessage(
+  channelId: string,
+  senderName: string,
+  content: string,
+  agentId?: string,
+  threadRootId?: string,
+  deliveryBehavior: DeliveryBehavior = 'interrupt',
+): Promise<Message> {
   const r = await apiFetch(`${API_BASE}/api/channels/${channelId}/messages`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ senderName, content, agentId, threadRootId }),
+    body: JSON.stringify({ senderName, content, agentId, threadRootId, deliveryBehavior }),
   });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Send message failed');
   return r.json();

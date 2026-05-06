@@ -483,6 +483,7 @@ export const CreateMessageRequestSchema = z.object({
   senderName: z.string().min(1),
   content: z.string().min(1),
   agentId: z.string().optional(),
+  deliveryBehavior: z.enum(['interrupt', 'queue']).optional(),
   actorType: ActorTypeSchema.optional(),
   actorId: z.string().min(1).optional(),
   threadRootId: z.string().optional(),

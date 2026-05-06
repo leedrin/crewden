@@ -760,7 +760,7 @@ interface TraceEvent {
 
 #### 来源
 
-融合 agencycli 的角色画像理念 + 终极规划的"Agent 是有明确身份/职责/权限边界的团队成员"原则。
+参考 agencycli 的角色画像理念 + 终极规划的"Agent 是有明确身份/职责/权限边界的团队成员"原则。
 
 #### 设计意图
 
@@ -819,7 +819,7 @@ function resolveAgent(query: {
 
 #### 来源
 
-融合 agencycli 的 Task 状态机、Hermes 的需求补规格经验和 Run 历史，以及终极规划的"Task as Execution Contract"。
+参考 agencycli 的 Task 状态机、Hermes 的需求补规格经验和 Run 历史，以及终极规划的"Task as Execution Contract"。
 
 #### 设计意图
 
@@ -877,7 +877,7 @@ interface TaskRun {
 
 #### 来源
 
-融合 agencycli 的 Inbox 闸门 + Molecule 的分层记忆 + 终极规划的 Thread/Decision/Document 体系。
+参考 agencycli 的 Inbox 闸门 + Molecule 的分层记忆 + 终极规划的 Thread/Decision/Document 体系。
 
 #### 设计意图
 
@@ -952,7 +952,7 @@ interface KnowledgeEntry {
 
 #### 来源
 
-融合 Hermes 的 Dispatcher 理念 + 终极规划的"Agent Orchestrator"（L3 层）+ Paseo 持久会话模型。
+参考 Hermes 的 Dispatcher 理念 + 终极规划的"Agent Orchestrator"（L3 层）+ Paseo 持久会话模型。
 
 #### 设计意图
 
@@ -1013,7 +1013,7 @@ Task status → assigned
 
 #### 来源
 
-融合 Hermes Curator 理念 + 终极规划的"沉淀知识库"。
+参考 Hermes Curator 理念 + 终极规划的"沉淀知识库"。
 
 #### 设计意图
 
@@ -1061,7 +1061,7 @@ Task status → assigned
 
 #### 来源
 
-融合 Multica 的 Polymorphic Actor 模型 + 终极规划的"Agent 作为团队成员"。
+参考 Multica 的 Polymorphic Actor 模型设计（详见 [MultiCa 可行性调研](./multica-task-board-feasibility.md)）+ 终极规划的"Agent 作为团队成员"。
 
 #### 设计意图
 
@@ -1117,7 +1117,7 @@ type Actor = {
 
 #### 来源
 
-融合 Multica 的 Autopilot 模型 + 终极规划的定时/事件驱动工作流。
+参考 Multica 的 Autopilot 模型设计（详见 [MultiCa 可行性调研](./multica-task-board-feasibility.md)）+ 终极规划的定时/事件驱动工作流。
 
 #### 设计意图
 
@@ -1188,7 +1188,7 @@ interface Autopilot {
 
 #### 来源
 
-融合 Multica 的 Skill concept + 终极规划的 Context Package + Paseo 的 turn-based 模型。
+参考 Multica 的 Skill 设计（详见 [MultiCa 可行性调研](./multica-task-board-feasibility.md)）+ 终极规划的 Context Package + Paseo 的 turn-based 模型。
 
 #### 设计意图
 

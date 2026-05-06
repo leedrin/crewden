@@ -13,6 +13,35 @@ beforeEach(async () => {
 });
 
 describe('task API', () => {
+  it('normalizes assignee names to agent ids', async () => {
+    const app = await buildApp();
+    const store = getStore();
+    await store.createAgent({
+      id: 'agent-dev',
+      name: 'dev',
+      displayName: 'Dev Agent',
+      runtime: 'claude',
+      status: 'idle',
+      createdAt: new Date().toISOString(),
+    });
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { channelId: 'general', title: 'normalize assignee', creatorName: 'user', assigneeId: 'Dev Agent' },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().assigneeId).toBe('agent-dev');
+
+    const invalid = await app.inject({
+      method: 'PATCH',
+      url: `/api/tasks/${created.json().id}`,
+      payload: { assigneeId: 'missing-agent' },
+    });
+    expect(invalid.statusCode).toBe(422);
+    expect(invalid.json()).toMatchObject({ error: 'Unknown assignee' });
+    await app.close();
+  });
+
   it('creates, lists, updates, and deletes tasks', async () => {
     const app = await buildApp();
     const created = await app.inject({
@@ -282,7 +311,8 @@ describe('task API', () => {
     expect(deliverSpy).toHaveBeenCalledTimes(1);
     const call = deliverSpy.mock.calls[0][0];
     expect(call.target.id).toBe('agent-1');
-    expect(call.message.channelId).toContain('task:');
+    expect(call.message.channelId).toBe('general');
+    expect(call.message.threadRootId).toBeUndefined();
     expect(call.inboxSummary).toContain('Open tasks assigned to you:');
     expect(call.inboxSummary).toContain('assigned delivery task');
     expect(call.inboxSummary).toContain('Claimable unassigned tasks matching your role/capability:');
@@ -350,7 +380,7 @@ describe('task API', () => {
     expect(deliverSpy).toHaveBeenCalledTimes(1);
     const call = deliverSpy.mock.calls[0][0];
     expect(call.target.id).toBe('agent-1');
-    expect(call.message.channelId).toBe(`task:${dependent.json().id}`);
+    expect(call.message.channelId).toBe('general');
     await app.close();
   });
 

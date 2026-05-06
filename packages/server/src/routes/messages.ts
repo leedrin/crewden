@@ -26,7 +26,7 @@ export async function messageRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
     }
-    const { senderName, content, agentId, actorType, actorId, threadRootId } = parsed.data;
+    const { senderName, content, agentId, deliveryBehavior, actorType, actorId, threadRootId } = parsed.data;
     const idempotencyHeader = req.headers['x-idempotency-key'];
     const idempotencyKey = typeof idempotencyHeader === 'string' ? idempotencyHeader.trim() : '';
     if (idempotencyKey) {
@@ -90,6 +90,7 @@ export async function messageRoutes(app: FastifyInstance) {
           seq: Date.now(),
           message: toAgentDelivery(message, channel),
           channelId: channel.id,
+          deliveryBehavior: deliveryBehavior ?? 'interrupt',
           inboxSummary: await buildOpenTaskSummary(agent),
         }));
       }

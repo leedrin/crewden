@@ -31,8 +31,10 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
   private readonly contextInjector = new CrewdenContextInjector();
   private readonly streamBridge = new TimelineToEventBridge();
   private readonly channelByRuntimeId = new Map<string, string>();
+  private readonly threadRootByRuntimeId = new Map<string, string | undefined>();
   private readonly sessionByAgentId = new Map<string, string>();
   private readonly streamingMessageByRuntimeId = new Map<string, { messageId: string; channelId: string }>();
+  private readonly lastRuntimeNoticeAt = new Map<string, number>();
   private client: PaseoDaemonClient | undefined;
 
   constructor(options: PaseoModeOptions = {}) {
@@ -86,6 +88,7 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
         await this.mapper.clear(params.agent.id);
         this.inbox.clear(runtimeInstanceId);
         this.channelByRuntimeId.delete(runtimeInstanceId);
+        this.threadRootByRuntimeId.delete(runtimeInstanceId);
         this.streamingMessageByRuntimeId.delete(runtimeInstanceId);
         runtimeInstanceId = undefined;
       } else {
@@ -135,6 +138,7 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
     await this.syncAgentStatus(params.agent.id, created.snapshot);
     if (params.wakeMessage) {
       this.channelByRuntimeId.set(created.paseoAgentId, params.wakeMessage.channelId);
+      this.threadRootByRuntimeId.set(created.paseoAgentId, params.wakeMessage.threadRootId);
     }
     return true;
   }
@@ -150,6 +154,7 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
       await this.mapper.clear(agent.id);
       this.inbox.clear(runtimeInstanceId);
       this.channelByRuntimeId.delete(runtimeInstanceId);
+      this.threadRootByRuntimeId.delete(runtimeInstanceId);
       this.sessionByAgentId.delete(agent.id);
       this.streamBridge.clear(agent.id);
       this.streamingMessageByRuntimeId.delete(runtimeInstanceId);
@@ -168,6 +173,7 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
         await this.mapper.clear(params.agent.id);
         this.inbox.clear(runtimeInstanceId);
         this.channelByRuntimeId.delete(runtimeInstanceId);
+        this.threadRootByRuntimeId.delete(runtimeInstanceId);
         this.streamingMessageByRuntimeId.delete(runtimeInstanceId);
         runtimeInstanceId = undefined;
       } else {
@@ -197,6 +203,7 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
     }
 
     this.channelByRuntimeId.set(runtimeInstanceId, params.channelId);
+    this.threadRootByRuntimeId.set(runtimeInstanceId, params.message.threadRootId);
     const prompt = this.contextInjector.buildDeliverPrompt({
       delivery: params.message,
       inboxSummary: params.inboxSummary,
@@ -204,14 +211,18 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
       channelId: params.channelId,
     });
 
-    await this.inbox.enqueue(
-      runtimeInstanceId,
-      { ...params.message, content: prompt },
-      async (id, text) => {
-        await this.client!.sendMessage(id, text);
-        await this.drainQueue(id);
-      },
-    );
+    const behavior = params.deliveryBehavior ?? 'interrupt';
+    if (behavior === 'interrupt') {
+      this.inbox.clear(runtimeInstanceId);
+      await this.client.sendMessage(runtimeInstanceId, prompt);
+      await this.emitQueueDepthActivity(runtimeInstanceId, params.agent.id);
+      return true;
+    }
+
+    await this.inbox.enqueue(runtimeInstanceId, { ...params.message, content: prompt }, async (id, text) => {
+      await this.client!.sendMessage(id, text);
+    });
+    await this.emitQueueDepthActivity(runtimeInstanceId, params.agent.id);
     return true;
   }
 
@@ -329,13 +340,6 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
     return { ok: true };
   }
 
-  private async drainQueue(runtimeInstanceId: string): Promise<void> {
-    await this.inbox.onAgentIdle(runtimeInstanceId, async (id, text) => {
-      await this.client!.sendMessage(id, text);
-      await this.drainQueue(id);
-    });
-  }
-
   private resolveAgentCwd(agent: Agent): string {
     const base = this.options.workspaceRoot?.trim();
     if (!base) return process.cwd();
@@ -422,11 +426,17 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
   }
 
   private async handleRuntimeStreamEvent(runtimeInstanceId: string, event: PaseoStreamEvent): Promise<void> {
+    const activeThreadRootId = this.threadRootByRuntimeId.get(runtimeInstanceId);
+    const activeChannelId = this.channelByRuntimeId.get(runtimeInstanceId);
     if (event.type === 'turn_started') {
       this.streamingMessageByRuntimeId.delete(runtimeInstanceId);
     }
     if (event.type === 'turn_completed' || event.type === 'turn_failed' || event.type === 'turn_canceled') {
       this.streamingMessageByRuntimeId.delete(runtimeInstanceId);
+      this.threadRootByRuntimeId.delete(runtimeInstanceId);
+      await this.inbox.onAgentIdle(runtimeInstanceId, async (id, text) => {
+        await this.client!.sendMessage(id, text);
+      });
     }
 
     const crewdenAgentId = await this.mapper.resolveCrewdenAgentId(runtimeInstanceId);
@@ -441,6 +451,10 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
       const updated = await store.updateAgentStatus(crewdenAgentId, status);
       if (updated) eventBus.emit({ type: 'agent:update', agent: updated });
       return;
+    }
+
+    if (event.type === 'turn_completed' || event.type === 'turn_failed' || event.type === 'turn_canceled') {
+      await this.emitQueueDepthActivity(runtimeInstanceId, crewdenAgentId);
     }
 
     if (mapped.type === 'agent:session') {
@@ -463,6 +477,14 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
         detail: mapped.detail,
       });
       eventBus.emit({ type: 'agent:activity', agentId: crewdenAgentId, activity });
+      await this.maybeEmitRuntimeNotice({
+        runtimeInstanceId,
+        channelId: activeChannelId ?? channelId,
+        threadRootId: activeThreadRootId,
+        agentId: crewdenAgentId,
+        activityType: mapped.activityType,
+        detail: mapped.detail,
+      });
       return;
     }
 
@@ -470,11 +492,18 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
       const channel = await store.getChannel(mapped.channelId);
       if (!channel) return;
       const agent = await store.getAgent(crewdenAgentId);
+      const threadRootId = this.threadRootByRuntimeId.get(runtimeInstanceId);
       const currentStreamMessage = this.streamingMessageByRuntimeId.get(runtimeInstanceId);
       if (currentStreamMessage && currentStreamMessage.channelId === mapped.channelId) {
         const appended = await store.appendMessageContent(currentStreamMessage.messageId, mapped.content);
         if (appended) {
-          eventBus.emit({ type: 'message:new', message: appended });
+          if (appended.threadRootId) {
+            const thread = await store.getThread(appended.threadRootId);
+            if (thread) eventBus.emit({ type: 'thread:message:new', root: thread.root, message: appended });
+            else eventBus.emit({ type: 'message:new', message: appended });
+          } else {
+            eventBus.emit({ type: 'message:new', message: appended });
+          }
           return;
         }
         this.streamingMessageByRuntimeId.delete(runtimeInstanceId);
@@ -486,12 +515,110 @@ export class PaseoDaemonMode implements AgentRuntimeBridge {
         agentId: crewdenAgentId,
         senderName: agent?.displayName ?? agent?.name ?? crewdenAgentId,
         content: mapped.content,
+        threadRootId,
       });
       this.streamingMessageByRuntimeId.set(runtimeInstanceId, {
         messageId: created.id,
         channelId: created.channelId,
       });
-      eventBus.emit({ type: 'message:new', message: created });
+      if (created.threadRootId) {
+        const thread = await store.getThread(created.threadRootId);
+        if (thread) eventBus.emit({ type: 'thread:message:new', root: thread.root, message: created });
+        else eventBus.emit({ type: 'message:new', message: created });
+      } else {
+        eventBus.emit({ type: 'message:new', message: created });
+      }
+    }
+  }
+
+  private shouldEmitRuntimeNotice(noticeKey: string, minIntervalMs = 6000): boolean {
+    const now = Date.now();
+    const prev = this.lastRuntimeNoticeAt.get(noticeKey) ?? 0;
+    if (now - prev < minIntervalMs) return false;
+    this.lastRuntimeNoticeAt.set(noticeKey, now);
+    return true;
+  }
+
+  private async emitQueueDepthActivity(runtimeInstanceId: string, crewdenAgentId: string): Promise<void> {
+    const store = getStore();
+    const queueDepth = this.inbox.queueLength(runtimeInstanceId);
+    const processing = this.inbox.isProcessing(runtimeInstanceId) ? 1 : 0;
+    const activity = await store.createAgentActivity({
+      id: crypto.randomUUID(),
+      agentId: crewdenAgentId,
+      type: 'sending',
+      detail: `queue:depth:${queueDepth};processing:${processing}`,
+    });
+    eventBus.emit({ type: 'agent:activity', agentId: crewdenAgentId, activity });
+  }
+
+  private formatRuntimeNotice(params: {
+    agentId: string;
+    activityType: string;
+    detail?: string;
+  }): { key: string; content: string } | undefined {
+    const detail = params.detail ?? '';
+    if (detail.startsWith('permission:requested')) {
+      return {
+        key: `perm:${params.agentId}`,
+        content: `SYSTEM: Agent ${params.agentId} is waiting for permission approval. Open AGENTS panel to approve or deny.`,
+      };
+    }
+    if (detail.startsWith('attention:')) {
+      return {
+        key: `attention:${params.agentId}`,
+        content: `SYSTEM: Agent ${params.agentId} requires attention: ${detail}`,
+      };
+    }
+    if (params.activityType === 'error' && detail.startsWith('turn_canceled:Interrupted')) {
+      return {
+        key: `interrupted:${params.agentId}`,
+        content: `SYSTEM: Agent ${params.agentId} run was interrupted. This usually happens when a new message arrives before the previous turn finishes.`,
+      };
+    }
+    if (params.activityType === 'error' && detail) {
+      return {
+        key: `error:${params.agentId}:${detail.slice(0, 48)}`,
+        content: `SYSTEM: Agent ${params.agentId} reported an error: ${detail}`,
+      };
+    }
+    return undefined;
+  }
+
+  private async maybeEmitRuntimeNotice(params: {
+    runtimeInstanceId: string;
+    channelId?: string;
+    threadRootId?: string;
+    agentId: string;
+    activityType: string;
+    detail?: string;
+  }): Promise<void> {
+    const notice = this.formatRuntimeNotice({
+      agentId: params.agentId,
+      activityType: params.activityType,
+      detail: params.detail,
+    });
+    if (!notice) return;
+    const channelId = params.channelId ?? 'general';
+    if (!this.shouldEmitRuntimeNotice(`${params.runtimeInstanceId}:${notice.key}`)) return;
+    const store = getStore();
+    const channel = await store.getChannel(channelId);
+    if (!channel) return;
+    const message = await store.createMessage({
+      id: crypto.randomUUID(),
+      channelId,
+      senderName: 'system',
+      actorType: 'system',
+      actorId: 'system',
+      content: notice.content,
+      threadRootId: params.threadRootId,
+    });
+    if (message.threadRootId) {
+      const thread = await store.getThread(message.threadRootId);
+      if (thread) eventBus.emit({ type: 'thread:message:new', root: thread.root, message });
+      else eventBus.emit({ type: 'message:new', message });
+    } else {
+      eventBus.emit({ type: 'message:new', message });
     }
   }
 }

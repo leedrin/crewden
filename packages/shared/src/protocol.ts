@@ -107,6 +107,7 @@ export type GoalBriefStatus = 'draft' | 'confirmed' | 'cancelled' | 'completed';
 export type GoalAlignmentStatus = 'needs_clarification' | 'awaiting_confirmation' | 'confirmed' | 'cancelled';
 export type GoalAlignmentRiskLevel = 'low' | 'medium' | 'high';
 export type MessageIntent = 'chat' | 'task' | 'goal';
+export type DeliveryBehavior = 'interrupt' | 'queue';
 export type ThreadStatus = 'active' | 'resolved' | 'archived';
 export type ThreadParticipant = {
   actorType: ActorType;

@@ -171,6 +171,57 @@ body {
   transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
 }
 
+.pane-resize-handle {
+  position: relative;
+  width: 8px;
+  flex: 0 0 8px;
+  cursor: col-resize;
+  background: repeating-linear-gradient(
+    to bottom,
+    #e9e9db 0,
+    #e9e9db 6px,
+    #d6d6c5 6px,
+    #d6d6c5 12px
+  );
+  border-left: 1px solid #bcbca8;
+  border-right: 1px solid #bcbca8;
+}
+
+.pane-resize-handle:hover {
+  background: repeating-linear-gradient(
+    to bottom,
+    #ffe585 0,
+    #ffe585 6px,
+    #ffd34d 6px,
+    #ffd34d 12px
+  );
+}
+
+.side-toggle {
+  position: fixed;
+  z-index: 24;
+  border: 2px solid #000;
+  background: #fff;
+  color: #000;
+  font-family: var(--font);
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 3px 3px 0 #000;
+  padding: 6px 8px;
+}
+
+.side-toggle-left {
+  left: 10px;
+  top: 60px;
+}
+
+
+.side-toggle-right {
+  right: 10px;
+  top: 60px;
+}
+
+
 .right-rail-trigger:hover,
 .right-rail-trigger:focus-visible {
   background: var(--yellow);
@@ -406,6 +457,11 @@ body {
     top: 60px;
     right: 10px;
     min-height: 40px;
+  }
+
+  .pane-resize-handle,
+  .side-toggle {
+    display: none !important;
   }
 
   .message-list {

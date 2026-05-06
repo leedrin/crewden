@@ -38,7 +38,7 @@ export function AgentDetailPanel({ agent, agents, machines, activities, reminder
 
   return (
     <div className="right-panel right-panel-detail" style={{
-      width: 360,
+      width: '100%',
       background: '#fafaf5',
       borderLeft: '2px solid #000',
       display: 'flex',

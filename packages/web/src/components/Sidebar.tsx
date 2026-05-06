@@ -28,6 +28,7 @@ type Props = {
   onDeleteChannel: (id: string) => Promise<void>;
   onSelectAgent: (id: string) => void;
   onOpenAgents: () => void;
+  onToggleSidebar?: () => void;
   className?: string;
   onNavigate?: () => void;
   onSignOut?: () => void;
@@ -35,7 +36,7 @@ type Props = {
 
 const S = {
   sidebar: {
-    width: 240,
+    width: '100%',
     background: '#FFD700',
     borderRight: '2px solid #000',
     display: 'flex',
@@ -67,7 +68,7 @@ const S = {
   },
 };
 
-export function Sidebar({ projects, selectedProjectId, channels, agents, activitiesByAgent = {}, machines, runtimeStatus, selectedView, selectedChannel, selectedAgentId, webVersion, hubVersion, taskCount, inboxCount, onSelectInbox, onSelectTasks, onSelectKnowledge, onOpenSearch, onSelectProject, onSelectChannel, onCreateChannel, onDeleteChannel, onSelectAgent, onOpenAgents, className, onNavigate, onSignOut }: Props) {
+export function Sidebar({ projects, selectedProjectId, channels, agents, activitiesByAgent = {}, machines, runtimeStatus, selectedView, selectedChannel, selectedAgentId, webVersion, hubVersion, taskCount, inboxCount, onSelectInbox, onSelectTasks, onSelectKnowledge, onOpenSearch, onSelectProject, onSelectChannel, onCreateChannel, onDeleteChannel, onSelectAgent, onOpenAgents, onToggleSidebar, className, onNavigate, onSignOut }: Props) {
   const [creating, setCreating] = useState(false);
   const [channelName, setChannelName] = useState('');
   const [channelError, setChannelError] = useState('');
@@ -88,7 +89,16 @@ export function Sidebar({ projects, selectedProjectId, channels, agents, activit
   return (
     <div className={`sidebar-shell${className ? ` ${className}` : ''}`} style={S.sidebar}>
       <div className="sidebar-item sidebar-workspace" style={S.workspaceName}>
-        <span>▶ {t('nav.workspace')}</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {onToggleSidebar ? (
+            <button type="button" onClick={onToggleSidebar} title="Toggle sidebar" style={triangleToggleButtonStyle}>
+              ▶
+            </button>
+          ) : (
+            <span>▶</span>
+          )}
+          {t('nav.workspace')}
+        </span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span title={versionTitle(webVersion, hubVersion)} style={{ fontSize: 10, fontWeight: 400, opacity: 0.65 }}>
             web {shortVersion(webVersion.version)}
@@ -321,6 +331,18 @@ export function Sidebar({ projects, selectedProjectId, channels, agents, activit
     </div>
   );
 }
+
+const triangleToggleButtonStyle: React.CSSProperties = {
+  border: '1.5px solid #000',
+  background: '#fff',
+  color: '#000',
+  fontFamily: "'Courier New', monospace",
+  fontSize: 10,
+  fontWeight: 700,
+  lineHeight: 1,
+  padding: '1px 4px',
+  cursor: 'pointer',
+};
 
 function shortVersion(version: string): string {
   return version.length > 12 ? `${version.slice(0, 12)}` : version;

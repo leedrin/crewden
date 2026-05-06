@@ -202,7 +202,7 @@ export function AgentPanel({ projectId, agents, machines, runtimeStatus, onAgent
 
   return (
     <div className="right-panel right-panel-agents" style={{
-      width: 280,
+      width: '100%',
       background: '#fafaf5',
       borderLeft: '2px solid #000',
       display: 'flex',

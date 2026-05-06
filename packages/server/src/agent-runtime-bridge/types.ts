@@ -27,6 +27,7 @@ export type DeliverMessageParams = {
   seq: number;
   channelId: string;
   message: AgentDelivery;
+  deliveryBehavior?: 'interrupt' | 'queue';
   config?: AgentRuntimeConfig;
   inboxSummary?: string;
 };

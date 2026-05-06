@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { Agent, AgentActivity, Decision, Document, Message, ThreadStatus } from '../api.js';
+import type { Agent, AgentActivity, Decision, DeliveryBehavior, Document, Message, ThreadStatus } from '../api.js';
 import { MessageContent } from './MessageContent.js';
 import { PresenceAvatar } from './PresenceAvatar.js';
 import { Composer } from './Composer.js';
@@ -14,6 +14,9 @@ type Props = {
   linkedDecisions?: Decision[];
   linkedDocuments?: Document[];
   agents: Agent[];
+  sendBehavior: DeliveryBehavior;
+  onSendBehaviorChange: (behavior: DeliveryBehavior) => void;
+  queueStateByAgent: Record<string, { depth: number; processing: boolean }>;
   activitiesByAgent: Record<string, AgentActivity[]>;
   targetMessageId?: string;
   onClose: () => void;
@@ -33,6 +36,9 @@ export function ThreadPanel({
   linkedDecisions,
   linkedDocuments,
   agents,
+  sendBehavior,
+  onSendBehaviorChange,
+  queueStateByAgent,
   activitiesByAgent,
   targetMessageId,
   onClose,
@@ -63,8 +69,7 @@ export function ThreadPanel({
 
   return (
     <aside className="right-panel right-panel-thread" style={{
-      width: 340,
-      maxWidth: '42vw',
+      width: '100%',
       borderLeft: '1px solid #d7d7ca',
       background: '#fff',
       display: 'flex',
@@ -147,7 +152,14 @@ export function ThreadPanel({
         ) : null}
         <div ref={bottomRef} />
       </div>
-      <Composer agents={agents} channelName={t('thread.title')} onSend={onSend} />
+      <Composer
+        agents={agents}
+        channelName={t('thread.title')}
+        sendBehavior={sendBehavior}
+        onSendBehaviorChange={onSendBehaviorChange}
+        queueStateByAgent={queueStateByAgent}
+        onSend={onSend}
+      />
     </aside>
   );
 }
