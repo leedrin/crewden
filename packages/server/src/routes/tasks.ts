@@ -156,6 +156,9 @@ export async function taskRoutes(app: FastifyInstance) {
     if (isHighRisk(task) && parsed.data.requesterAgentId && parsed.data.reviewerAgentId === parsed.data.requesterAgentId && !parsed.data.allowSelfReview) {
       return reply.status(400).send({ error: 'High risk task requires a different reviewer' });
     }
+    if (!isTaskTransitionAllowed(task.status, 'in_review')) {
+      return reply.status(422).send({ error: 'Invalid task status transition', from: task.status, to: 'in_review' });
+    }
     const review = createReview(task.id, parsed.data);
     const taskUpdated = await store.updateTask(task.id, {
       status: 'in_review',
@@ -170,6 +173,17 @@ export async function taskRoutes(app: FastifyInstance) {
       },
     });
     if (!taskUpdated) return reply.status(404).send({ error: 'Task not found' });
+    if (taskUpdated.status !== task.status) {
+      await store.appendAuditLog({
+        actorType: parsed.data.requesterAgentId ? 'agent' : 'human',
+        actorId: parsed.data.requesterAgentId ?? task.creator.actorId,
+        action: 'task.status_changed',
+        entityType: 'task',
+        entityId: taskUpdated.id,
+        taskId: taskUpdated.id,
+        detailJson: { from: task.status, to: taskUpdated.status, reason: 'review_requested' },
+      });
+    }
     eventBus.emit({ type: 'task:update', task: taskUpdated });
     return reply.status(201).send(review);
   });
@@ -189,12 +203,16 @@ async function reviewDecision(reviewId: string, body: unknown, status: 'approved
   const store = getStore();
   const task = (await store.listTasks()).find((candidate) => candidate.context?.reviews?.some((review) => review.id === reviewId));
   if (!task) return reply.status(404).send({ error: 'Review not found' });
+  const nextTaskStatus = status === 'approved' ? 'done' : 'changes_requested';
+  if (!isTaskTransitionAllowed(task.status, nextTaskStatus)) {
+    return reply.status(422).send({ error: 'Invalid task status transition', from: task.status, to: nextTaskStatus });
+  }
   const now = new Date().toISOString();
   const reviews = (task.context?.reviews ?? []).map((review) => review.id === reviewId
     ? { ...review, reviewerAgentId: parsed.data.reviewerAgentId ?? review.reviewerAgentId, status, comment: parsed.data.comment, checklist: review.checklist.map((item) => ({ ...item, checked: status === 'approved' ? true : item.checked })), updatedAt: now }
     : review);
   const updated = await store.updateTask(task.id, {
-    status: status === 'approved' ? 'done' : 'in_progress',
+    status: nextTaskStatus,
     context: {
       ...task.context,
       reviewNotes: [...(task.context?.reviewNotes ?? []), `${status}: ${parsed.data.comment}`],
@@ -202,6 +220,17 @@ async function reviewDecision(reviewId: string, body: unknown, status: 'approved
     },
   });
   if (!updated) return reply.status(404).send({ error: 'Task not found' });
+  if (updated.status !== task.status) {
+    await store.appendAuditLog({
+      actorType: parsed.data.reviewerAgentId ? 'agent' : 'human',
+      actorId: parsed.data.reviewerAgentId ?? task.creator.actorId,
+      action: 'task.status_changed',
+      entityType: 'task',
+      entityId: updated.id,
+      taskId: updated.id,
+      detailJson: { from: task.status, to: updated.status, reason: status },
+    });
+  }
   eventBus.emit({ type: 'task:update', task: updated });
   return reply.status(200).send(reviews.find((review) => review.id === reviewId));
 }

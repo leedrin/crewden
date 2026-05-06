@@ -845,11 +845,28 @@ describe('agent internal API', () => {
     });
     expect(changes.statusCode).toBe(200);
     expect(changes.json()).toMatchObject({ status: 'changes_requested', reviewerAgentId: 'agent-qa' });
-    expect((await store.getTask('task-review'))?.status).toBe('in_progress');
+    expect((await store.getTask('task-review'))?.status).toBe('changes_requested');
+
+    const resumed = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/agent-1/tasks/task-review/update',
+      headers,
+      payload: { status: 'in_progress' },
+    });
+    expect(resumed.statusCode).toBe(200);
+
+    const requestedAgain = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/agent-1/tasks/task-review/reviews',
+      headers,
+      payload: { reviewerAgentId: 'agent-qa', evidence: ['web test added'], checklist: ['has evidence'], comment: 'updated' },
+    });
+    expect(requestedAgain.statusCode).toBe(201);
+    const secondReview = requestedAgain.json();
 
     const approved = await app.inject({
       method: 'POST',
-      url: `/internal/agent/agent-qa/reviews/${review.id}/approve`,
+      url: `/internal/agent/agent-qa/reviews/${secondReview.id}/approve`,
       headers: qaHeaders,
       payload: { comment: 'verified' },
     });

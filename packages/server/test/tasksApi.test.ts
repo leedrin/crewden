@@ -429,6 +429,12 @@ describe('task API', () => {
       },
     });
     const taskId = created.json().id;
+    const ready = await app.inject({ method: 'PATCH', url: `/api/tasks/${taskId}`, payload: { status: 'ready' } });
+    expect(ready.statusCode).toBe(200);
+    const assigned = await app.inject({ method: 'PATCH', url: `/api/tasks/${taskId}`, payload: { status: 'assigned' } });
+    expect(assigned.statusCode).toBe(200);
+    const started = await app.inject({ method: 'PATCH', url: `/api/tasks/${taskId}`, payload: { status: 'in_progress' } });
+    expect(started.statusCode).toBe(200);
 
     const requested = await app.inject({
       method: 'POST',
@@ -456,11 +462,33 @@ describe('task API', () => {
     });
     expect(changes.statusCode).toBe(200);
     expect(changes.json()).toMatchObject({ status: 'changes_requested', comment: 'add browser test evidence' });
-    expect((await getStore().getTask(taskId))?.status).toBe('in_progress');
+    const changedTask = await getStore().getTask(taskId);
+    expect(changedTask?.status).toBe('changes_requested');
+
+    const resumed = await app.inject({
+      method: 'PATCH',
+      url: `/api/tasks/${taskId}`,
+      payload: { status: 'in_progress', expectedVersion: changedTask?.version },
+    });
+    expect(resumed.statusCode).toBe(200);
+
+    const rerequested = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${taskId}/reviews`,
+      payload: {
+        requesterAgentId: 'agent-dev',
+        reviewerAgentId: 'agent-qa',
+        evidence: ['browser test added'],
+        checklist: ['evidence exists'],
+        comment: 'updated and ready',
+      },
+    });
+    expect(rerequested.statusCode).toBe(201);
+    const secondReview = rerequested.json();
 
     const approved = await app.inject({
       method: 'POST',
-      url: `/api/reviews/${review.id}/approve`,
+      url: `/api/reviews/${secondReview.id}/approve`,
       payload: { reviewerAgentId: 'agent-qa', comment: 'evidence and checklist verified' },
     });
     expect(approved.statusCode).toBe(200);
@@ -483,6 +511,12 @@ describe('task API', () => {
       },
     });
     const taskId = created.json().id;
+    const ready = await app.inject({ method: 'PATCH', url: `/api/tasks/${taskId}`, payload: { status: 'ready' } });
+    expect(ready.statusCode).toBe(200);
+    const assigned = await app.inject({ method: 'PATCH', url: `/api/tasks/${taskId}`, payload: { status: 'assigned' } });
+    expect(assigned.statusCode).toBe(200);
+    const started = await app.inject({ method: 'PATCH', url: `/api/tasks/${taskId}`, payload: { status: 'in_progress' } });
+    expect(started.statusCode).toBe(200);
     const blocked = await app.inject({
       method: 'POST',
       url: `/api/tasks/${taskId}/reviews`,

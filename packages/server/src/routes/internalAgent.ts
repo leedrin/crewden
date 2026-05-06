@@ -35,6 +35,7 @@ import {
   type Agent,
   type DirectMessage,
   type Task,
+  type TaskStatus,
   type TaskProgressEventType,
   type TaskReview,
 } from '@crewden/shared';
@@ -587,6 +588,9 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     if (isHighRiskReviewTask(task) && parsed.data.reviewerAgentId === agent.id && !parsed.data.allowSelfReview) {
       return reply.status(400).send({ error: 'High risk task requires a different reviewer' });
     }
+    if (!isTaskTransitionAllowed(task.status, 'in_review')) {
+      return reply.status(422).send({ error: 'Invalid task status transition', from: task.status, to: 'in_review' });
+    }
     const review = createTaskReview(task.id, parsed.data);
     const updated = await store.updateTask(task.id, {
       status: 'in_review',
@@ -601,6 +605,18 @@ export async function internalAgentRoutes(app: FastifyInstance) {
       },
     });
     if (!updated) return reply.status(404).send({ error: 'Task not found' });
+    if (updated.status !== task.status) {
+      await store.appendAuditLog({
+        actorType: 'agent',
+        actorId: agent.id,
+        action: 'task.status_changed',
+        entityType: 'task',
+        entityId: updated.id,
+        taskId: updated.id,
+        agentId: agent.id,
+        detailJson: { from: task.status, to: updated.status, reason: 'review_requested' },
+      });
+    }
     eventBus.emit({ type: 'task:update', task: updated });
     return reply.status(201).send(review);
   });
@@ -785,6 +801,15 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     if (existing.assigneeId && existing.assigneeId !== agent.id) return reply.status(403).send({ error: 'Task is assigned to another agent' });
     const parsed = InternalTaskUpdateRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
+    if (parsed.data.status && !isTaskTransitionAllowed(existing.status, parsed.data.status)) {
+      return reply.status(422).send({ error: 'Invalid task status transition', from: existing.status, to: parsed.data.status });
+    }
+    const dependencyError = await validateTaskDependencies(existing.id, parsed.data.context?.blockedByTaskIds);
+    if (dependencyError) return reply.status(422).send({ error: dependencyError });
+    if (parsed.data.status === 'in_progress') {
+      const blockersError = await validateBlockersComplete({ ...existing, ...parsed.data });
+      if (blockersError) return reply.status(422).send({ error: blockersError });
+    }
     const task = await store.updateTask(req.params.taskId, parsed.data);
     if (!task) return reply.status(404).send({ error: 'Task not found' });
     if (parsed.data.status && parsed.data.status !== existing.status) {
@@ -898,6 +923,10 @@ async function internalReviewDecision(agentId: string, reviewId: string, body: u
   if (!task) return reply.status(404).send({ error: 'Review not found' });
   const review = task.context?.reviews?.find((candidate) => candidate.id === reviewId);
   if (review?.reviewerAgentId && review.reviewerAgentId !== agent.id) return reply.status(403).send({ error: 'Review is assigned to another agent' });
+  const nextTaskStatus = status === 'approved' ? 'done' : 'changes_requested';
+  if (!isTaskTransitionAllowed(task.status, nextTaskStatus)) {
+    return reply.status(422).send({ error: 'Invalid task status transition', from: task.status, to: nextTaskStatus });
+  }
   const now = new Date().toISOString();
   const reviews = (task.context?.reviews ?? []).map((candidate) => candidate.id === reviewId
     ? {
@@ -910,7 +939,7 @@ async function internalReviewDecision(agentId: string, reviewId: string, body: u
     }
     : candidate);
   const updated = await store.updateTask(task.id, {
-    status: status === 'approved' ? 'done' : 'in_progress',
+    status: nextTaskStatus,
     context: {
       ...task.context,
       reviewNotes: [...(task.context?.reviewNotes ?? []), `${status}: ${parsed.data.comment}`],
@@ -918,8 +947,70 @@ async function internalReviewDecision(agentId: string, reviewId: string, body: u
     },
   });
   if (!updated) return reply.status(404).send({ error: 'Task not found' });
+  if (updated.status !== task.status) {
+    await store.appendAuditLog({
+      actorType: 'agent',
+      actorId: agent.id,
+      action: 'task.status_changed',
+      entityType: 'task',
+      entityId: updated.id,
+      taskId: updated.id,
+      agentId: agent.id,
+      detailJson: { from: task.status, to: updated.status, reason: status },
+    });
+  }
   eventBus.emit({ type: 'task:update', task: updated });
   return reply.status(200).send(reviews.find((candidate) => candidate.id === reviewId));
+}
+
+function isTaskTransitionAllowed(from: TaskStatus, to: TaskStatus): boolean {
+  if (from === to) return true;
+  const allowed: Record<TaskStatus, TaskStatus[]> = {
+    backlog: ['spec_needed', 'ready', 'cancelled'],
+    spec_needed: ['ready', 'backlog'],
+    ready: ['assigned', 'backlog', 'cancelled'],
+    assigned: ['in_progress', 'ready', 'cancelled'],
+    in_progress: ['in_review', 'cancelled'],
+    in_review: ['changes_requested', 'qa', 'done', 'cancelled'],
+    changes_requested: ['in_progress', 'cancelled'],
+    qa: ['done', 'changes_requested', 'cancelled'],
+    done: [],
+    cancelled: [],
+  };
+  return allowed[from].includes(to);
+}
+
+async function validateTaskDependencies(taskId: string, blockedByTaskIds: string[] | undefined): Promise<string | undefined> {
+  if (!blockedByTaskIds?.length) return undefined;
+  if (blockedByTaskIds.includes(taskId)) return 'Circular task dependency';
+  const store = getStore();
+  for (const blockerId of blockedByTaskIds) {
+    const blocker = await store.getTask(blockerId);
+    if (!blocker) return 'Unknown task dependency';
+    if (await hasDependencyPath(blockerId, taskId, new Set([taskId]))) return 'Circular task dependency';
+  }
+  return undefined;
+}
+
+async function validateBlockersComplete(task: { dependsOn?: string[]; context?: { blockedByTaskIds?: string[] } }): Promise<string | undefined> {
+  const blockerIds = [...new Set([...(task.dependsOn ?? []), ...(task.context?.blockedByTaskIds ?? [])])];
+  for (const blockerId of blockerIds) {
+    const blocker = await getStore().getTask(blockerId);
+    if (!blocker) return 'Unknown task dependency';
+    if (blocker.status !== 'done') return 'Task dependency is not done';
+  }
+  return undefined;
+}
+
+async function hasDependencyPath(fromTaskId: string, targetTaskId: string, visited: Set<string>): Promise<boolean> {
+  if (fromTaskId === targetTaskId) return true;
+  if (visited.has(fromTaskId)) return false;
+  visited.add(fromTaskId);
+  const task = await getStore().getTask(fromTaskId);
+  for (const blockerId of task?.context?.blockedByTaskIds ?? []) {
+    if (await hasDependencyPath(blockerId, targetTaskId, visited)) return true;
+  }
+  return false;
 }
 
 function createTaskReview(taskId: string, data: { requesterAgentId?: string; reviewerAgentId?: string; evidence: string[]; checklist: Array<string | { label: string; checked: boolean }>; comment?: string }): TaskReview {

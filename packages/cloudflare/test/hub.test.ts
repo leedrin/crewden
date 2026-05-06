@@ -265,6 +265,24 @@ describe('agent internal API', () => {
       body: JSON.stringify({ channelId: 'general', title: `cf review task ${crypto.randomUUID()}`, creatorName: 'user', assigneeId: agent.id }),
     });
     const reviewTask = (await reviewTaskCreated.json()) as { id: string };
+    const reviewReady = await SELF.fetch(`https://hub.test/api/tasks/${reviewTask.id}`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status: 'ready' }),
+    });
+    expect(reviewReady.status).toBe(200);
+    const reviewAssigned = await SELF.fetch(`https://hub.test/api/tasks/${reviewTask.id}`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status: 'assigned' }),
+    });
+    expect(reviewAssigned.status).toBe(200);
+    const reviewStarted = await SELF.fetch(`https://hub.test/api/tasks/${reviewTask.id}`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status: 'in_progress' }),
+    });
+    expect(reviewStarted.status).toBe(200);
     const reviewRequested = await SELF.fetch(`https://hub.test/internal/agent/${agent.id}/tasks/${reviewTask.id}/reviews`, {
       method: 'POST',
       headers: internalHeaders,
@@ -542,6 +560,24 @@ describe('input validation', () => {
       body: JSON.stringify({ channelId: 'general', title: `cf public review ${crypto.randomUUID()}`, creatorName: 'user', context: { risks: ['medium'] } }),
     });
     const task = (await created.json()) as { id: string };
+    const ready = await SELF.fetch(`https://hub.test/api/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status: 'ready' }),
+    });
+    expect(ready.status).toBe(200);
+    const assigned = await SELF.fetch(`https://hub.test/api/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status: 'assigned' }),
+    });
+    expect(assigned.status).toBe(200);
+    const started = await SELF.fetch(`https://hub.test/api/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status: 'in_progress' }),
+    });
+    expect(started.status).toBe(200);
     const requested = await SELF.fetch(`https://hub.test/api/tasks/${task.id}/reviews`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -562,7 +598,28 @@ describe('input validation', () => {
     expect(changes.status).toBe(200);
     expect(await changes.json()).toMatchObject({ status: 'changes_requested' });
 
-    const approved = await SELF.fetch(`https://hub.test/api/reviews/${review.id}/approve`, {
+    const changedTaskRes = await SELF.fetch('https://hub.test/api/tasks', { headers: authHeaders() });
+    expect(changedTaskRes.status).toBe(200);
+    const changedTask = ((await changedTaskRes.json()) as Array<{ id: string; version: number; status: string }>).find((candidate) => candidate.id === task.id);
+    if (!changedTask) throw new Error('Changed task not found');
+    expect(changedTask.status).toBe('changes_requested');
+
+    const resumed = await SELF.fetch(`https://hub.test/api/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status: 'in_progress', expectedVersion: changedTask.version }),
+    });
+    expect(resumed.status).toBe(200);
+
+    const requestedAgain = await SELF.fetch(`https://hub.test/api/tasks/${task.id}/reviews`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ requesterAgentId: 'dev', reviewerAgentId: 'qa', evidence: ['web evidence added'], checklist: ['evidence exists'] }),
+    });
+    expect(requestedAgain.status).toBe(201);
+    const secondReview = (await requestedAgain.json()) as { id: string };
+
+    const approved = await SELF.fetch(`https://hub.test/api/reviews/${secondReview.id}/approve`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ reviewerAgentId: 'qa', comment: 'verified' }),

@@ -1194,6 +1194,9 @@ export class CrewdenHub extends DurableObject<Env> {
     if (isHighRiskTask(task) && requester && parsed.data.reviewerAgentId === requester && !parsed.data.allowSelfReview) {
       return json({ error: 'High risk task requires a different reviewer' }, 400);
     }
+    if (!isTaskTransitionAllowed(task.status, 'in_review')) {
+      return json({ error: 'Invalid task status transition', from: task.status, to: 'in_review' }, 422);
+    }
     const review = makeTaskReview(task.id, { ...parsed.data, requesterAgentId: requester });
     const updated = this.updateTask(task.id, {
       status: 'in_review',
@@ -1208,6 +1211,17 @@ export class CrewdenHub extends DurableObject<Env> {
       },
     });
     if (!updated) return json({ error: 'Task not found' }, 404);
+    if (updated.status !== task.status) {
+      this.appendAuditLog({
+        actorType: requester ? 'agent' : 'human',
+        actorId: requester ?? task.creator.actorId,
+        action: 'task.status_changed',
+        entityType: 'task',
+        entityId: updated.id,
+        taskId: updated.id,
+        detailJson: { from: task.status, to: updated.status, reason: 'review_requested' },
+      });
+    }
     this.broadcast({ type: 'task:update', task: updated });
     return json(review, 201);
   }
@@ -1220,6 +1234,10 @@ export class CrewdenHub extends DurableObject<Env> {
     const review = task.context?.reviews?.find((candidate) => candidate.id === reviewId);
     const reviewer = reviewerAgentId ?? parsed.data.reviewerAgentId;
     if (reviewerAgentId && review?.reviewerAgentId && review.reviewerAgentId !== reviewerAgentId) return json({ error: 'Review is assigned to another agent' }, 403);
+    const nextTaskStatus = status === 'approved' ? 'done' : 'changes_requested';
+    if (!isTaskTransitionAllowed(task.status, nextTaskStatus)) {
+      return json({ error: 'Invalid task status transition', from: task.status, to: nextTaskStatus }, 422);
+    }
     const now = new Date().toISOString();
     const reviews = (task.context?.reviews ?? []).map((candidate) => candidate.id === reviewId
       ? {
@@ -1232,7 +1250,7 @@ export class CrewdenHub extends DurableObject<Env> {
       }
       : candidate);
     const updated = this.updateTask(task.id, {
-      status: status === 'approved' ? 'done' : 'in_progress',
+      status: nextTaskStatus,
       context: {
         ...task.context,
         reviewNotes: [...(task.context?.reviewNotes ?? []), `${status}: ${parsed.data.comment}`],
@@ -1240,6 +1258,17 @@ export class CrewdenHub extends DurableObject<Env> {
       },
     });
     if (!updated) return json({ error: 'Task not found' }, 404);
+    if (updated.status !== task.status) {
+      this.appendAuditLog({
+        actorType: reviewer ? 'agent' : 'human',
+        actorId: reviewer ?? task.creator.actorId,
+        action: 'task.status_changed',
+        entityType: 'task',
+        entityId: updated.id,
+        taskId: updated.id,
+        detailJson: { from: task.status, to: updated.status, reason: status },
+      });
+    }
     this.broadcast({ type: 'task:update', task: updated });
     return json(reviews.find((candidate) => candidate.id === reviewId));
   }
@@ -1830,6 +1859,12 @@ export class CrewdenHub extends DurableObject<Env> {
       if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
       if (parsed.data.status && !isTaskTransitionAllowed(existing.status, parsed.data.status)) {
         return json({ error: 'Invalid task status transition', from: existing.status, to: parsed.data.status }, 422);
+      }
+      const dependencyError = this.validateTaskDependencies(existing.id, parsed.data.context?.blockedByTaskIds);
+      if (dependencyError) return json({ error: dependencyError }, 422);
+      if (parsed.data.status === 'in_progress') {
+        const blockersError = this.validateBlockersComplete({ ...existing, ...parsed.data });
+        if (blockersError) return json({ error: blockersError }, 422);
       }
       const task = this.updateTask(existing.id, parsed.data);
       if (!task) return json({ error: 'Task not found' }, 404);
