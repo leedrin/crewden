@@ -4,6 +4,7 @@
   "version": "2.0.0",
   "scripts": {
     "start": "bash start.sh",
+    "start:windows": "powershell -ExecutionPolicy Bypass -File .\\scripts\\start-windows.ps1",
     "dev": "pnpm --parallel --filter @crewden/server --filter @crewden/web dev",
     "dev:stable": "bash scripts/dev-stable.sh",
     "deploy:web:pages": "bash scripts/deploy-cloudflare-pages.sh",

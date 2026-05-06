@@ -4,7 +4,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx --env-file=../../.env watch src/index.ts",
     "build": "pnpm --filter @crewden/hub-core build && pnpm --filter @crewden/paseo-client build && tsc",
     "typecheck": "pnpm --filter @crewden/hub-core build && pnpm --filter @crewden/paseo-client build && tsc --noEmit",
     "test": "vitest run"

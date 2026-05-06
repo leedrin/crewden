@@ -36,6 +36,27 @@ pnpm dev
 - Server: http://localhost:3000
 - Web UI: http://localhost:5173
 
+### Windows one-command startup
+
+From PowerShell in repo root:
+
+```powershell
+pnpm run start:windows
+```
+
+For first-time setup/build on Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-windows.ps1 -Build
+```
+
+Useful options:
+
+- `-Mode prod|dev` (default: `prod`)
+- `-DaemonUrl ws://127.0.0.1:6767/ws`
+- `-McpBridgeBin C:\path\to\crewden\packages\paseo-client\dist\mcp-bridge\index.js`
+- `-SkipDaemonCheck`
+
 ### Configure Paseo runtime
 
 ```bash
