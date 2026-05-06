@@ -3,6 +3,9 @@ import { z } from 'zod';
 export const RuntimeIdSchema = z.enum(['claude', 'codex', 'gemini', 'opencode', 'pi']);
 
 export const AgentStatusSchema = z.enum(['inactive', 'starting', 'running', 'working', 'idle', 'error']);
+export const AgentRoleSchema = z.enum(['unassigned', 'product', 'architect', 'developer', 'qa', 'reviewer', 'security', 'devops', 'documentation', 'coordinator', 'planner']);
+export const AgentCapabilitySchema = z.enum(['requirements', 'coding', 'review', 'testing', 'security', 'deployment', 'docs', 'research', 'planning']);
+export const AgentWorkingStyleSchema = z.enum(['execution', 'planning', 'reviewing', 'researching']);
 
 export const AgentActivityTypeSchema = z.enum(['thinking', 'working', 'output', 'idle', 'sending', 'error']);
 export const ActorTypeSchema = z.enum(['human', 'agent', 'system']);
@@ -49,6 +52,22 @@ export const AgentOrganizationSchema = z.object({
   backupAgentIds: z.array(z.string()).optional(),
   availability: z.enum(['available', 'unavailable', 'overloaded']).optional(),
 }).partial();
+
+export const AgentPermissionsSchema = z.object({
+  readChannels: z.array(z.string().min(1)).default([]),
+  writeChannels: z.array(z.string().min(1)).default([]),
+  createDocs: z.boolean().default(false),
+  createTasks: z.boolean().default(true),
+  claimTasks: z.boolean().default(true),
+  createBranches: z.boolean().default(false),
+  createPrs: z.boolean().default(false),
+  mergeToMain: z.boolean().default(false),
+  deployToProd: z.boolean().default(false),
+  accessSensitiveData: z.boolean().default(false),
+  callExternalApis: z.array(z.string().min(1)).default([]),
+  maxContextTokens: z.number().int().positive().default(100000),
+  requiresApprovalFor: z.array(z.string().min(1)).default([]),
+});
 
 export const AgentDeliverySchema = z.object({
   id: z.string(),
@@ -369,6 +388,14 @@ export const CreateAgentRequestSchema = z.object({
   systemPrompt: z.string().optional(),
   machineId: z.string().optional(),
   envVars: z.record(z.string()).optional(),
+  role: AgentRoleSchema.optional(),
+  responsibilities: z.array(z.string().min(1)).optional(),
+  capabilities: z.array(AgentCapabilitySchema).optional(),
+  workingStyle: AgentWorkingStyleSchema.optional(),
+  handoffPreference: z.string().optional(),
+  constraints: z.array(z.string().min(1)).optional(),
+  examples: z.array(z.string().min(1)).optional(),
+  permissions: AgentPermissionsSchema.optional(),
   organization: AgentOrganizationSchema.optional(),
 });
 
@@ -382,6 +409,14 @@ export const PatchAgentRequestSchema = z
     systemPrompt: z.string().optional(),
     autoStart: z.boolean().optional(),
     envVars: z.record(z.string()).optional(),
+    role: AgentRoleSchema.optional(),
+    responsibilities: z.array(z.string().min(1)).optional(),
+    capabilities: z.array(AgentCapabilitySchema).optional(),
+    workingStyle: AgentWorkingStyleSchema.optional(),
+    handoffPreference: z.string().optional(),
+    constraints: z.array(z.string().min(1)).optional(),
+    examples: z.array(z.string().min(1)).optional(),
+    permissions: AgentPermissionsSchema.optional(),
     organization: AgentOrganizationSchema.optional(),
   })
   .refine(
@@ -394,6 +429,14 @@ export const PatchAgentRequestSchema = z
       val.systemPrompt !== undefined ||
       val.autoStart !== undefined ||
       val.envVars !== undefined ||
+      val.role !== undefined ||
+      val.responsibilities !== undefined ||
+      val.capabilities !== undefined ||
+      val.workingStyle !== undefined ||
+      val.handoffPreference !== undefined ||
+      val.constraints !== undefined ||
+      val.examples !== undefined ||
+      val.permissions !== undefined ||
       val.organization !== undefined,
     { message: 'At least one field must be provided' },
   );
@@ -620,9 +663,27 @@ export const InternalAgentDelegateRequestSchema = z.object({
   startIfInactive: z.boolean().optional(),
 });
 
-export const InternalAgentResolveRequestSchema = z.object({
-  query: z.string().min(1),
-});
+export const InternalAgentResolveRequestSchema = z
+  .object({
+    query: z.string().min(1).optional(),
+    role: AgentRoleSchema.optional(),
+    capabilities: z.union([AgentCapabilitySchema, z.array(AgentCapabilitySchema)]).optional(),
+    excludeAgentId: z.string().min(1).optional(),
+    mustBeIdle: z.preprocess((value) => {
+      if (value === undefined) return undefined;
+      if (value === true || value === 'true' || value === '1') return true;
+      if (value === false || value === 'false' || value === '0') return false;
+      return value;
+    }, z.boolean()).optional(),
+    maxResults: z.coerce.number().int().positive().max(50).optional(),
+  })
+  .transform((value) => ({
+    ...value,
+    capabilities: typeof value.capabilities === 'string' ? [value.capabilities] : value.capabilities,
+  }))
+  .refine((value) => Boolean(value.query || value.role || (value.capabilities && value.capabilities.length > 0)), {
+    message: 'At least one of query, role, or capabilities is required',
+  });
 
 export const InternalTaskListRequestSchema = z.object({
   channel: z.string().min(1).optional(),

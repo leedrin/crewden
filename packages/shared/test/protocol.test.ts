@@ -41,6 +41,7 @@ import {
   AuditLogEntrySchema,
   StartGoalAlignmentRequestSchema,
   TaskSchema,
+  AgentPermissionsSchema,
 } from '../src/validation.js';
 import { APP_VERSION, createVersionInfo } from '../src/version.js';
 
@@ -223,6 +224,7 @@ describe('Internal agent API schemas', () => {
     expect(InternalMessageReadRequestSchema.safeParse({ channel: 'general', limit: '10' }).success).toBe(true);
     expect(InternalDmSendRequestSchema.safeParse({ to: 'agent-2', content: 'secret' }).success).toBe(true);
     expect(InternalAgentResolveRequestSchema.safeParse({ query: '产品经理' }).success).toBe(true);
+    expect(InternalAgentResolveRequestSchema.safeParse({ role: 'developer', capabilities: 'coding', mustBeIdle: 'true', maxResults: '5' }).success).toBe(true);
     expect(InternalAgentDelegateRequestSchema.safeParse({ to: 'agent-2', content: 'work', startIfInactive: true }).success).toBe(true);
     expect(InternalTaskListRequestSchema.safeParse({ status: 'backlog', all: 'true' }).success).toBe(true);
     expect(InternalTaskUpdateRequestSchema.safeParse({ status: 'in_progress' }).success).toBe(true);
@@ -239,6 +241,7 @@ describe('Internal agent API schemas', () => {
     expect(InternalMessageSendRequestSchema.safeParse({ channel: 'general', content: '' }).success).toBe(false);
     expect(InternalDmSendRequestSchema.safeParse({ to: 'agent-2', content: '' }).success).toBe(false);
     expect(InternalAgentResolveRequestSchema.safeParse({ query: '' }).success).toBe(false);
+    expect(InternalAgentResolveRequestSchema.safeParse({}).success).toBe(false);
     expect(InternalAgentDelegateRequestSchema.safeParse({ to: '', content: 'work' }).success).toBe(false);
     expect(InternalTaskUpdateRequestSchema.safeParse({}).success).toBe(false);
     expect(InternalGoalCreateRequestSchema.safeParse({ objective: '' }).success).toBe(false);
@@ -250,6 +253,39 @@ describe('Agent patch schemas', () => {
     expect(PatchAgentRequestSchema.safeParse({ runtime: 'codex' }).success).toBe(true);
     expect(PatchAgentRequestSchema.safeParse({ runtime: 'gpt4' }).success).toBe(false);
     expect(PatchAgentRequestSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('accepts identity v2 profile and permission fields', () => {
+    expect(CreateAgentRequestSchema.safeParse({
+      name: 'dev-agent',
+      runtime: 'codex',
+      role: 'developer',
+      capabilities: ['coding', 'review'],
+      responsibilities: ['ship v2.1 api'],
+      workingStyle: 'execution',
+      handoffPreference: 'handoff via thread summary',
+      constraints: ['no prod deploy'],
+      examples: ['api owner'],
+      permissions: {
+        writeChannels: ['general'],
+        createTasks: true,
+      },
+    }).success).toBe(true);
+    expect(PatchAgentRequestSchema.safeParse({
+      role: 'qa',
+      capabilities: ['testing'],
+      permissions: { createDocs: true },
+    }).success).toBe(true);
+  });
+});
+
+describe('Agent permission schema', () => {
+  it('applies defaults', () => {
+    const parsed = AgentPermissionsSchema.parse({ writeChannels: ['general'], createTasks: false });
+    expect(parsed.writeChannels).toEqual(['general']);
+    expect(parsed.createTasks).toBe(false);
+    expect(parsed.claimTasks).toBe(true);
+    expect(parsed.maxContextTokens).toBe(100000);
   });
 });
 

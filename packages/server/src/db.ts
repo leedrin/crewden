@@ -5,9 +5,9 @@ import { nanoid } from 'nanoid';
 import { drizzle, type LibSQLDatabase } from 'drizzle-orm/libsql';
 import { createClient, type Client } from '@libsql/client';
 import { asc, desc, eq, inArray, or } from 'drizzle-orm';
-import type { ActorType, Channel, Message, MessageThread, Machine, Agent, RuntimeId, AgentStatus, AgentActivity, DirectMessage, DirectMessageThread, AgentDelegation, AgentTokenInfo, Task, TaskStatus, GoalBrief, GoalBriefStatus, GoalAlignment, GoalAlignmentStatus, Reminder, ReminderStatus, SearchMessageResult, KnowledgeEntry, KnowledgeKind, KnowledgeSearchResult, KnowledgeStatus } from '@crewden/shared';
-import { resolveAgentReference } from '@crewden/hub-core';
-import { activities, agentDelegations, agentTokens, agents, auditLogs, channels, directMessages, goalAlignments, goals, knowledgeEntries, machines, messages, reminders, tasks } from './schema.js';
+import type { ActorType, Channel, Message, MessageThread, Machine, Agent, RuntimeId, AgentStatus, AgentActivity, DirectMessage, DirectMessageThread, AgentDelegation, AgentTokenInfo, Task, TaskStatus, GoalBrief, GoalBriefStatus, GoalAlignment, GoalAlignmentStatus, Reminder, ReminderStatus, SearchMessageResult, KnowledgeEntry, KnowledgeKind, KnowledgeSearchResult, KnowledgeStatus, AgentPermissions, AgentCapability, AgentRole } from '@crewden/shared';
+import { resolveAgentReference, resolveAgents } from '@crewden/hub-core';
+import { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, directMessages, goalAlignments, goals, knowledgeEntries, machines, messages, reminders, tasks } from './schema.js';
 
 type Database = LibSQLDatabase<typeof import('./schema.js')>;
 type NewMessage = Omit<Message, 'createdAt' | 'actorType' | 'actorId'> & Partial<Pick<Message, 'actorType' | 'actorId'>>;
@@ -51,7 +51,7 @@ async function ensureDbDirectory(path: string): Promise<void> {
 function createDatabase(): Database {
   const path = getDbPath();
   client = createClient({ url: getDbUrl(path) });
-  db = drizzle(client, { schema: { activities, agentDelegations, agentTokens, agents, auditLogs, channels, directMessages, goalAlignments, goals, knowledgeEntries, machines, messages, reminders, tasks } });
+  db = drizzle(client, { schema: { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, directMessages, goalAlignments, goals, knowledgeEntries, machines, messages, reminders, tasks } });
   return db;
 }
 
@@ -272,6 +272,13 @@ export async function initDb(): Promise<void> {
         model TEXT,
         system_prompt TEXT,
         env_vars TEXT,
+        role TEXT,
+        responsibilities TEXT,
+        capabilities TEXT,
+        working_style TEXT,
+        handoff_preference TEXT,
+        constraints_text TEXT,
+        examples TEXT,
         organization TEXT,
         machine_id TEXT,
         runtime_instance_id TEXT,
@@ -289,8 +296,34 @@ export async function initDb(): Promise<void> {
       if (!message.includes('duplicate column')) throw err;
     }
     await database.run(`ALTER TABLE agents ADD COLUMN env_vars TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE agents ADD COLUMN role TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE agents ADD COLUMN responsibilities TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE agents ADD COLUMN capabilities TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE agents ADD COLUMN working_style TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE agents ADD COLUMN handoff_preference TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE agents ADD COLUMN constraints_text TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE agents ADD COLUMN examples TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE agents ADD COLUMN organization TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE agents ADD COLUMN runtime_instance_id TEXT`).catch(() => undefined);
+    await database.run(`UPDATE agents SET role = 'unassigned' WHERE role IS NULL`).catch(() => undefined);
+    await database.run(`
+      CREATE TABLE IF NOT EXISTS agent_permissions (
+        agent_id TEXT PRIMARY KEY,
+        read_channels TEXT,
+        write_channels TEXT,
+        create_docs INTEGER NOT NULL DEFAULT 0,
+        create_tasks INTEGER NOT NULL DEFAULT 1,
+        claim_tasks INTEGER NOT NULL DEFAULT 1,
+        create_branches INTEGER NOT NULL DEFAULT 0,
+        create_prs INTEGER NOT NULL DEFAULT 0,
+        merge_to_main INTEGER NOT NULL DEFAULT 0,
+        deploy_to_prod INTEGER NOT NULL DEFAULT 0,
+        access_sensitive_data INTEGER NOT NULL DEFAULT 0,
+        call_external_apis TEXT,
+        max_context_tokens INTEGER NOT NULL DEFAULT 100000,
+        requires_approval_for TEXT
+      )
+    `);
     await database.run(`CREATE INDEX IF NOT EXISTS idx_agents_runtime_instance_id ON agents(runtime_instance_id)`);
     await database.run(`
       CREATE TABLE IF NOT EXISTS machines (
@@ -326,6 +359,49 @@ export async function resetVolatileState(): Promise<void> {
   await database.update(machines).set({ status: 'offline' });
 }
 
+function defaultAgentPermissions(): AgentPermissions {
+  return {
+    readChannels: [],
+    writeChannels: [],
+    createDocs: false,
+    createTasks: true,
+    claimTasks: true,
+    createBranches: false,
+    createPrs: false,
+    mergeToMain: false,
+    deployToProd: false,
+    accessSensitiveData: false,
+    callExternalApis: [],
+    maxContextTokens: 100000,
+    requiresApprovalFor: [],
+  };
+}
+
+function toAgentPermissions(row: typeof agentPermissions.$inferSelect): AgentPermissions {
+  const defaults = defaultAgentPermissions();
+  return {
+    readChannels: parseStringArray(row.readChannels) ?? defaults.readChannels,
+    writeChannels: parseStringArray(row.writeChannels) ?? defaults.writeChannels,
+    createDocs: Boolean(row.createDocs),
+    createTasks: row.createTasks === undefined ? defaults.createTasks : Boolean(row.createTasks),
+    claimTasks: row.claimTasks === undefined ? defaults.claimTasks : Boolean(row.claimTasks),
+    createBranches: Boolean(row.createBranches),
+    createPrs: Boolean(row.createPrs),
+    mergeToMain: Boolean(row.mergeToMain),
+    deployToProd: Boolean(row.deployToProd),
+    accessSensitiveData: Boolean(row.accessSensitiveData),
+    callExternalApis: parseStringArray(row.callExternalApis) ?? defaults.callExternalApis,
+    maxContextTokens: row.maxContextTokens ?? defaults.maxContextTokens,
+    requiresApprovalFor: parseStringArray(row.requiresApprovalFor) ?? defaults.requiresApprovalFor,
+  };
+}
+
+function normalizeRole(value: string | null | undefined): AgentRole {
+  const allowed: AgentRole[] = ['unassigned', 'product', 'architect', 'developer', 'qa', 'reviewer', 'security', 'devops', 'documentation', 'coordinator', 'planner'];
+  if (value && (allowed as string[]).includes(value)) return value as AgentRole;
+  return 'unassigned';
+}
+
 function toAgent(row: typeof agents.$inferSelect): Agent {
   return {
     id: row.id,
@@ -336,6 +412,13 @@ function toAgent(row: typeof agents.$inferSelect): Agent {
     model: row.model ?? undefined,
     systemPrompt: row.systemPrompt ?? undefined,
     envVars: row.envVars ? JSON.parse(row.envVars) as Record<string, string> : undefined,
+    role: normalizeRole(row.role),
+    responsibilities: parseStringArray(row.responsibilities),
+    capabilities: parseStringArray(row.capabilities) as AgentCapability[] | undefined,
+    workingStyle: row.workingStyle as Agent['workingStyle'] | undefined,
+    handoffPreference: row.handoffPreference ?? undefined,
+    constraints: parseStringArray(row.constraintsText),
+    examples: parseStringArray(row.examples),
     organization: row.organization ? JSON.parse(row.organization) as Agent['organization'] : undefined,
     machineId: row.machineId ?? undefined,
     runtimeInstanceId: row.runtimeInstanceId ?? undefined,
@@ -559,6 +642,67 @@ function toMachine(row: typeof machines.$inferSelect): Machine {
 }
 
 export class SqliteStore {
+  private async listAgentPermissionsByIds(agentIds: string[]): Promise<Map<string, AgentPermissions>> {
+    if (agentIds.length === 0) return new Map();
+    const rows = await getDb()
+      .select()
+      .from(agentPermissions)
+      .where(inArray(agentPermissions.agentId, agentIds));
+    return new Map(rows.map((row) => [row.agentId, toAgentPermissions(row)]));
+  }
+
+  private async withAgentPermissions(agentList: Agent[]): Promise<Agent[]> {
+    const permissionMap = await this.listAgentPermissionsByIds(agentList.map((agent) => agent.id));
+    return agentList.map((agent) => ({
+      ...agent,
+      permissions: permissionMap.get(agent.id) ?? defaultAgentPermissions(),
+    }));
+  }
+
+  async getAgentPermissions(agentId: string): Promise<AgentPermissions> {
+    await initDb();
+    const [row] = await getDb().select().from(agentPermissions).where(eq(agentPermissions.agentId, agentId)).limit(1);
+    return row ? toAgentPermissions(row) : defaultAgentPermissions();
+  }
+
+  async setAgentPermissions(agentId: string, permissions: AgentPermissions): Promise<AgentPermissions> {
+    await initDb();
+    await getDb().insert(agentPermissions).values({
+      agentId,
+      readChannels: JSON.stringify(permissions.readChannels),
+      writeChannels: JSON.stringify(permissions.writeChannels),
+      createDocs: permissions.createDocs,
+      createTasks: permissions.createTasks,
+      claimTasks: permissions.claimTasks,
+      createBranches: permissions.createBranches,
+      createPrs: permissions.createPrs,
+      mergeToMain: permissions.mergeToMain,
+      deployToProd: permissions.deployToProd,
+      accessSensitiveData: permissions.accessSensitiveData,
+      callExternalApis: JSON.stringify(permissions.callExternalApis),
+      maxContextTokens: permissions.maxContextTokens,
+      requiresApprovalFor: JSON.stringify(permissions.requiresApprovalFor),
+    }).onConflictDoUpdate({
+      target: agentPermissions.agentId,
+      set: {
+        readChannels: JSON.stringify(permissions.readChannels),
+        writeChannels: JSON.stringify(permissions.writeChannels),
+        createDocs: permissions.createDocs,
+        createTasks: permissions.createTasks,
+        claimTasks: permissions.claimTasks,
+        createBranches: permissions.createBranches,
+        createPrs: permissions.createPrs,
+        mergeToMain: permissions.mergeToMain,
+        deployToProd: permissions.deployToProd,
+        accessSensitiveData: permissions.accessSensitiveData,
+        callExternalApis: JSON.stringify(permissions.callExternalApis),
+        maxContextTokens: permissions.maxContextTokens,
+        requiresApprovalFor: JSON.stringify(permissions.requiresApprovalFor),
+      },
+    });
+    return permissions;
+  }
+
   async listChannels(): Promise<Channel[]> {
     await initDb();
     return getDb().select().from(channels).orderBy(asc(channels.createdAt));
@@ -1192,16 +1336,26 @@ export class SqliteStore {
     await getDb().update(machines).set({ status: 'offline' }).where(eq(machines.id, id));
   }
 
-  async listAgents(): Promise<Agent[]> {
+  async listAgents(filter: { role?: AgentRole; capability?: AgentCapability } = {}): Promise<Agent[]> {
     await initDb();
     const rows = await getDb().select().from(agents).orderBy(asc(agents.createdAt));
-    return rows.map(toAgent);
+    let agentList = await this.withAgentPermissions(rows.map(toAgent));
+    if (filter.role) {
+      agentList = agentList.filter((agent) => (agent.role ?? 'unassigned') === filter.role);
+    }
+    if (filter.capability) {
+      const capability = filter.capability;
+      agentList = agentList.filter((agent) => (agent.capabilities ?? []).includes(capability));
+    }
+    return agentList;
   }
 
   async getAgent(id: string): Promise<Agent | undefined> {
     await initDb();
     const [agent] = await getDb().select().from(agents).where(eq(agents.id, id)).limit(1);
-    return agent ? toAgent(agent) : undefined;
+    if (!agent) return undefined;
+    const parsed = toAgent(agent);
+    return { ...parsed, permissions: await this.getAgentPermissions(parsed.id) };
   }
 
   async getAgentByRuntimeInstanceId(runtimeInstanceId: string): Promise<Agent | undefined> {
@@ -1211,7 +1365,9 @@ export class SqliteStore {
       .from(agents)
       .where(eq(agents.runtimeInstanceId, runtimeInstanceId))
       .limit(1);
-    return agent ? toAgent(agent) : undefined;
+    if (!agent) return undefined;
+    const parsed = toAgent(agent);
+    return { ...parsed, permissions: await this.getAgentPermissions(parsed.id) };
   }
 
   async findAgentByNameOrId(value: string): Promise<Agent | undefined> {
@@ -1224,8 +1380,20 @@ export class SqliteStore {
     return resolveAgentReference(value, await this.listAgents());
   }
 
+  async resolveAgentsByProfile(input: {
+    role?: AgentRole;
+    capabilities?: AgentCapability[];
+    excludeAgentId?: string;
+    mustBeIdle?: boolean;
+    maxResults?: number;
+  }) {
+    await initDb();
+    return resolveAgents(await this.listAgents(), input);
+  }
+
   async createAgent(agent: Agent): Promise<Agent> {
     await initDb();
+    const role = agent.role ?? 'unassigned';
     await getDb().insert(agents).values({
       ...agent,
       displayName: agent.displayName ?? null,
@@ -1233,12 +1401,25 @@ export class SqliteStore {
       model: agent.model ?? null,
       systemPrompt: agent.systemPrompt ?? null,
       envVars: agent.envVars ? JSON.stringify(agent.envVars) : null,
+      role,
+      responsibilities: agent.responsibilities ? JSON.stringify(agent.responsibilities) : null,
+      capabilities: agent.capabilities ? JSON.stringify(agent.capabilities) : null,
+      workingStyle: agent.workingStyle ?? null,
+      handoffPreference: agent.handoffPreference ?? null,
+      constraintsText: agent.constraints ? JSON.stringify(agent.constraints) : null,
+      examples: agent.examples ? JSON.stringify(agent.examples) : null,
       organization: agent.organization ? JSON.stringify(agent.organization) : null,
       machineId: agent.machineId ?? null,
       runtimeInstanceId: agent.runtimeInstanceId ?? null,
       autoStart: agent.autoStart ?? false,
     });
-    return agent;
+    const permissions = agent.permissions ?? defaultAgentPermissions();
+    await this.setAgentPermissions(agent.id, permissions);
+    return {
+      ...agent,
+      role,
+      permissions,
+    };
   }
 
   async getAgentToken(agentId: string): Promise<AgentTokenInfo | undefined> {
@@ -1270,7 +1451,7 @@ export class SqliteStore {
     await initDb();
     const existing = await this.getAgent(id);
     if (!existing) return undefined;
-    const updated = { ...existing, ...patch };
+    const updated = { ...existing, ...patch, role: patch.role ?? existing.role ?? 'unassigned' };
     await getDb()
       .update(agents)
       .set({
@@ -1281,6 +1462,13 @@ export class SqliteStore {
         model: updated.model ?? null,
         systemPrompt: updated.systemPrompt ?? null,
         envVars: updated.envVars ? JSON.stringify(updated.envVars) : null,
+        role: updated.role ?? 'unassigned',
+        responsibilities: updated.responsibilities ? JSON.stringify(updated.responsibilities) : null,
+        capabilities: updated.capabilities ? JSON.stringify(updated.capabilities) : null,
+        workingStyle: updated.workingStyle ?? null,
+        handoffPreference: updated.handoffPreference ?? null,
+        constraintsText: updated.constraints ? JSON.stringify(updated.constraints) : null,
+        examples: updated.examples ? JSON.stringify(updated.examples) : null,
         organization: updated.organization ? JSON.stringify(updated.organization) : null,
         machineId: updated.machineId ?? null,
         runtimeInstanceId: updated.runtimeInstanceId ?? null,
@@ -1289,6 +1477,10 @@ export class SqliteStore {
         createdAt: updated.createdAt,
       })
       .where(eq(agents.id, id));
+    if (patch.permissions) {
+      await this.setAgentPermissions(id, patch.permissions);
+    }
+    updated.permissions = patch.permissions ?? existing.permissions ?? defaultAgentPermissions();
     return updated;
   }
 
@@ -1308,6 +1500,7 @@ export class SqliteStore {
     await database.delete(activities).where(eq(activities.agentId, id));
     await database.delete(agentTokens).where(eq(agentTokens.agentId, id));
     await database.delete(reminders).where(eq(reminders.agentId, id));
+    await database.delete(agentPermissions).where(eq(agentPermissions.agentId, id));
     await database.delete(agentDelegations).where(or(eq(agentDelegations.fromAgentId, id), eq(agentDelegations.toAgentId, id)));
     await database.delete(directMessages).where(or(eq(directMessages.fromAgentId, id), eq(directMessages.toAgentId, id)));
     await database.delete(agents).where(eq(agents.id, id));
@@ -1334,6 +1527,7 @@ export async function resetStore(): Promise<void> {
   await database.delete(goalAlignments);
   await database.delete(reminders);
   await database.delete(knowledgeEntries);
+  await database.delete(agentPermissions);
   await database.delete(agents);
   await database.delete(machines);
   await database.delete(channels);

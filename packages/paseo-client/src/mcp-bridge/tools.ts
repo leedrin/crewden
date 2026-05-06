@@ -195,6 +195,49 @@ export function createToolDefinitions(): ToolDefinition[] {
       },
     },
     {
+      name: "crewden_agent_profile",
+      title: "Show Agent Profile",
+      description: "Show current agent profile with role/capabilities/permissions.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      run: async (_args, { client }) => {
+        const whoami = await client.get(agentPath(client, "/auth/whoami")) as { agent?: unknown };
+        return whoami.agent ?? {};
+      },
+    },
+    {
+      name: "crewden_resolve_agents",
+      title: "Resolve Agents",
+      description: "Find matching agents by role/capabilities or free-text query.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Free text query." },
+          role: { type: "string", description: "product|architect|developer|qa|reviewer|security|devops|documentation|coordinator|planner|unassigned" },
+          capabilities: { type: "array", items: { type: "string" }, description: "requirements|coding|review|testing|security|deployment|docs|research|planning" },
+          excludeAgentId: { type: "string", description: "Agent id to exclude." },
+          mustBeIdle: { type: "boolean", description: "Only return idle agents." },
+          maxResults: { type: "number", description: "Limit result count." },
+        },
+        additionalProperties: false,
+      },
+      run: async (args, { client }) => {
+        return client.get(agentPath(client, "/agents/resolve"), {
+          query: {
+            query: asString(args.query),
+            role: asString(args.role),
+            capabilities: asStringArray(args.capabilities),
+            excludeAgentId: asString(args.excludeAgentId),
+            mustBeIdle: asBoolean(args.mustBeIdle),
+            maxResults: asNumber(args.maxResults),
+          },
+        });
+      },
+    },
+    {
       name: "crewden_list_channels",
       title: "List Channels",
       description: "List all channels visible to this workspace.",

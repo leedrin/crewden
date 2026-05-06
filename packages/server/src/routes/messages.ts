@@ -8,12 +8,19 @@ import { buildOpenTaskSummary } from '../taskDelivery.js';
 import { paseoRuntimeService } from '../runtime/paseo-runtime-service.js';
 import { cacheIdempotentMessage, deliverWithRetry, getCachedIdempotentMessage } from '../runtime/delivery-reliability.js';
 import { isRuntimeSupported, markUnsupportedRuntime } from '../runtime/runtime-support.js';
+import { canAgentWriteChannel } from '../agentPermissions.js';
+import { resolveActingAgent } from '../requestAgentAuth.js';
 
 export async function messageRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>('/api/channels/:id/messages', async (req, reply) => {
     const store = getStore();
     const channel = await store.getChannel(req.params.id);
     if (!channel) return reply.status(404).send({ error: 'Channel not found' });
+    const actingAgent = await resolveActingAgent(req, reply);
+    if (reply.sent) return reply;
+    if (actingAgent && !(await canAgentWriteChannel(actingAgent.id, channel.id))) {
+      return reply.status(403).send({ error: 'Agent does not have permission: write_channels' });
+    }
 
     const parsed = CreateMessageRequestSchema.safeParse(req.body);
     if (!parsed.success) {

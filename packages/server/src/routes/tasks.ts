@@ -4,6 +4,8 @@ import { CreateTaskRequestSchema, CreateTaskReviewRequestSchema, MessageToTaskRe
 import { getStore } from '../db.js';
 import { eventBus } from '../events.js';
 import { notifyTaskAssignee, notifyTasksBlockedBy } from '../taskDelivery.js';
+import { requireAgentPermission } from '../agentPermissions.js';
+import { resolveActingAgent } from '../requestAgentAuth.js';
 
 export async function taskRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { channelId?: string; status?: string } }>('/api/tasks', async (req, reply) => {
@@ -18,6 +20,11 @@ export async function taskRoutes(app: FastifyInstance) {
   app.post('/api/tasks', async (req, reply) => {
     const parsed = CreateTaskRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
+    const actingAgent = await resolveActingAgent(req, reply);
+    if (reply.sent) return reply;
+    if (actingAgent && !(await requireAgentPermission(actingAgent.id, 'createTasks'))) {
+      return reply.status(403).send({ error: 'Agent does not have permission: create_tasks' });
+    }
     const channel = await getStore().getChannel(parsed.data.channelId);
     if (!channel) return reply.status(404).send({ error: 'Channel not found' });
 

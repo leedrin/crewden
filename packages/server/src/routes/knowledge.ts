@@ -3,6 +3,8 @@ import { nanoid } from 'nanoid';
 import { CreateKnowledgeEntryRequestSchema, PatchKnowledgeEntryRequestSchema, SearchKnowledgeRequestSchema, type KnowledgeEntry } from '@crewden/shared';
 import { getStore } from '../db.js';
 import { eventBus } from '../events.js';
+import { requireAgentPermission } from '../agentPermissions.js';
+import { resolveActingAgent } from '../requestAgentAuth.js';
 
 export async function knowledgeRoutes(app: FastifyInstance) {
   app.get('/api/knowledge', async (req, reply) => {
@@ -12,6 +14,11 @@ export async function knowledgeRoutes(app: FastifyInstance) {
   });
 
   app.post('/api/knowledge', async (req, reply) => {
+    const actingAgent = await resolveActingAgent(req, reply);
+    if (reply.sent) return reply;
+    if (actingAgent && !(await requireAgentPermission(actingAgent.id, 'createDocs'))) {
+      return reply.status(403).send({ error: 'Agent does not have permission: create_docs' });
+    }
     const parsed = CreateKnowledgeEntryRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
     if (parsed.data.sourceRefs.length === 0 && !parsed.data.allowNoSource) return reply.status(400).send({ error: 'sourceRefs are required unless allowNoSource is true' });

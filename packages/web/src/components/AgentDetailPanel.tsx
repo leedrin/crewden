@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Agent, AgentActivity, DirectMessage, DirectMessageThread, Machine, Reminder, Task } from '../api.js';
+import type { Agent, AgentActivity, AgentCapability, AgentRole, AgentWorkingStyle, DirectMessage, DirectMessageThread, Machine, Reminder, Task } from '../api.js';
 import { cancelReminder, createAgentReminder, deleteAgent, getAgentDirectMessages, getAgentDmThreads, patchAgent, sendAgentDirectMessage, startAgent, stopAgent } from '../api.js';
 import { WorkspaceBrowser } from './WorkspaceBrowser.js';
 
@@ -28,6 +28,10 @@ const ACTIVITY_META: Record<AgentActivity['type'], { label: string; color: strin
   sending: { label: 'SENDING MESSAGE', color: '#00c853' },
   error: { label: 'ERROR', color: '#f44336' },
 };
+
+const ROLE_OPTIONS: AgentRole[] = ['unassigned', 'product', 'architect', 'developer', 'qa', 'reviewer', 'security', 'devops', 'documentation', 'coordinator', 'planner'];
+const CAPABILITY_OPTIONS: AgentCapability[] = ['requirements', 'coding', 'review', 'testing', 'security', 'deployment', 'docs', 'research', 'planning'];
+const WORKING_STYLE_OPTIONS: AgentWorkingStyle[] = ['execution', 'planning', 'reviewing', 'researching'];
 
 export function AgentDetailPanel({ agent, agents, machines, activities, reminders, tasks, onReminderUpdated, onAgentUpdated, onAgentDeleted, onClose }: Props) {
   const [tab, setTab] = useState<Tab>('profile');
@@ -91,6 +95,13 @@ function Profile({ agent, machines, tasks, onAgentUpdated, onAgentDeleted }: {
   const [model, setModel] = useState(agent.model ?? '');
   const [systemPrompt, setSystemPrompt] = useState(agent.systemPrompt ?? '');
   const [envVarsText, setEnvVarsText] = useState(formatEnvVars(agent.envVars));
+  const [role, setRole] = useState<AgentRole>(agent.role ?? 'unassigned');
+  const [capabilities, setCapabilities] = useState<AgentCapability[]>(agent.capabilities ?? []);
+  const [responsibilitiesText, setResponsibilitiesText] = useState((agent.responsibilities ?? []).join('\n'));
+  const [workingStyle, setWorkingStyle] = useState<AgentWorkingStyle>(agent.workingStyle ?? 'execution');
+  const [handoffPreference, setHandoffPreference] = useState(agent.handoffPreference ?? '');
+  const [constraintsText, setConstraintsText] = useState((agent.constraints ?? []).join('\n'));
+  const [permissionsText, setPermissionsText] = useState(formatPermissions(agent.permissions));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -105,6 +116,13 @@ function Profile({ agent, machines, tasks, onAgentUpdated, onAgentDeleted }: {
     setModel(agent.model ?? '');
     setSystemPrompt(agent.systemPrompt ?? '');
     setEnvVarsText(formatEnvVars(agent.envVars));
+    setRole(agent.role ?? 'unassigned');
+    setCapabilities(agent.capabilities ?? []);
+    setResponsibilitiesText((agent.responsibilities ?? []).join('\n'));
+    setWorkingStyle(agent.workingStyle ?? 'execution');
+    setHandoffPreference(agent.handoffPreference ?? '');
+    setConstraintsText((agent.constraints ?? []).join('\n'));
+    setPermissionsText(formatPermissions(agent.permissions));
     setError(undefined);
     setDeleteError(undefined);
     setDeleteOpen(false);
@@ -121,6 +139,13 @@ function Profile({ agent, machines, tasks, onAgentUpdated, onAgentDeleted }: {
         model: model.trim() || undefined,
         systemPrompt: systemPrompt.trim() || undefined,
         envVars: parseEnvVars(envVarsText),
+        role,
+        capabilities,
+        responsibilities: splitLines(responsibilitiesText),
+        workingStyle,
+        handoffPreference: handoffPreference.trim() || undefined,
+        constraints: splitLines(constraintsText),
+        permissions: parsePermissions(permissionsText),
       });
       onAgentUpdated(updated);
     } catch (err) {
@@ -219,10 +244,19 @@ function Profile({ agent, machines, tasks, onAgentUpdated, onAgentDeleted }: {
         busy={busy}
         onChange={setRuntime}
       />
+      <SelectField label="ROLE" value={role} options={ROLE_OPTIONS} onChange={(value) => setRole(value as AgentRole)} />
+      <SelectField label="WORK STYLE" value={workingStyle} options={WORKING_STYLE_OPTIONS} onChange={(value) => setWorkingStyle(value as AgentWorkingStyle)} />
+      <MultiSelectChips label="CAPABILITIES" options={CAPABILITY_OPTIONS} values={capabilities} onToggle={(capability) => {
+        setCapabilities((prev) => prev.includes(capability) ? prev.filter((item) => item !== capability) : [...prev, capability]);
+      }} />
       <Field label="DISPLAY" value={displayName} onChange={setDisplayName} />
       <Field label="DESCRIPTION" value={description} onChange={setDescription} multiline />
       <Field label="MODEL" value={model} onChange={setModel} />
       <Field label="SYSTEM" value={systemPrompt} onChange={setSystemPrompt} multiline />
+      <Field label="RESPONSIBILITIES" value={responsibilitiesText} onChange={setResponsibilitiesText} multiline />
+      <Field label="HANDOFF" value={handoffPreference} onChange={setHandoffPreference} multiline />
+      <Field label="CONSTRAINTS" value={constraintsText} onChange={setConstraintsText} multiline />
+      <Field label="PERMISSIONS JSON" value={permissionsText} onChange={setPermissionsText} multiline />
       <Field label="ENV" value={envVarsText} onChange={setEnvVarsText} multiline />
       <ReadonlyRows rows={[
         ['MACHINE', machineLabel],
@@ -541,6 +575,42 @@ function Field({ label, value, onChange, multiline }: { label: string; value: st
   );
 }
 
+function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 10, fontWeight: 700 }}>
+      {label}
+      <select value={value} onChange={(event) => onChange(event.target.value)} style={inputStyle}>
+        {options.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function MultiSelectChips({ label, options, values, onToggle }: { label: string; options: string[]; values: string[]; onToggle: (value: AgentCapability) => void }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ fontSize: 10, fontWeight: 700 }}>{label}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {options.map((option) => {
+          const selected = values.includes(option);
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onToggle(option as AgentCapability)}
+              style={buttonStyle(selected ? '#FFD700' : '#fff', '#000')}
+            >
+              {option}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ReadonlyRows({ rows }: { rows: string[][] }) {
   return (
     <div style={{ border: '2px solid #000', background: '#fff' }}>
@@ -665,6 +735,27 @@ function parseEnvVars(value: string): Record<string, string> | undefined {
 function formatEnvVars(envVars: Record<string, string> | undefined): string {
   if (!envVars) return '';
   return Object.entries(envVars).map(([key, value]) => `${key}=${value}`).join('\n');
+}
+
+function splitLines(value: string): string[] | undefined {
+  const items = value.split('\n').map((line) => line.trim()).filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
+
+function parsePermissions(value: string): Agent['permissions'] | undefined {
+  const text = value.trim();
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text) as Agent['permissions'];
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatPermissions(permissions: Agent['permissions'] | undefined): string {
+  if (!permissions) return '';
+  return JSON.stringify(permissions, null, 2);
 }
 
 function formatTime(value: string): string {

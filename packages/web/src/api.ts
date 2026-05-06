@@ -12,7 +12,47 @@ export type Message = { id: string; channelId: string; senderName: string; conte
 export type MessageThread = { root: Message; replies: Message[] };
 export type SearchMessageResult = Message & { channelName: string };
 export type AgentOrganization = { department?: string; roles?: string[]; capabilities?: string[]; responsibilities?: string[]; managerId?: string; backupAgentIds?: string[]; availability?: 'available' | 'unavailable' | 'overloaded' };
-export type Agent = { id: string; name: string; displayName?: string; description?: string; runtime: string; model?: string; systemPrompt?: string; envVars?: Record<string, string>; organization?: AgentOrganization; status: string; machineId?: string; autoStart?: boolean; createdAt: string };
+export type AgentRole = 'unassigned' | 'product' | 'architect' | 'developer' | 'qa' | 'reviewer' | 'security' | 'devops' | 'documentation' | 'coordinator' | 'planner';
+export type AgentCapability = 'requirements' | 'coding' | 'review' | 'testing' | 'security' | 'deployment' | 'docs' | 'research' | 'planning';
+export type AgentWorkingStyle = 'execution' | 'planning' | 'reviewing' | 'researching';
+export type AgentPermissions = {
+  readChannels: string[];
+  writeChannels: string[];
+  createDocs: boolean;
+  createTasks: boolean;
+  claimTasks: boolean;
+  createBranches: boolean;
+  createPrs: boolean;
+  mergeToMain: boolean;
+  deployToProd: boolean;
+  accessSensitiveData: boolean;
+  callExternalApis: string[];
+  maxContextTokens: number;
+  requiresApprovalFor: string[];
+};
+export type Agent = {
+  id: string;
+  name: string;
+  displayName?: string;
+  description?: string;
+  runtime: string;
+  model?: string;
+  systemPrompt?: string;
+  envVars?: Record<string, string>;
+  role?: AgentRole;
+  responsibilities?: string[];
+  capabilities?: AgentCapability[];
+  workingStyle?: AgentWorkingStyle;
+  handoffPreference?: string;
+  constraints?: string[];
+  examples?: string[];
+  permissions?: AgentPermissions;
+  organization?: AgentOrganization;
+  status: string;
+  machineId?: string;
+  autoStart?: boolean;
+  createdAt: string;
+};
 export type AgentActivity = { id: string; agentId: string; type: 'thinking' | 'working' | 'output' | 'idle' | 'sending' | 'error'; detail?: string; createdAt: string };
 export type DirectMessage = { id: string; fromAgentId: string; toAgentId: string; content: string; createdAt: string };
 export type DirectMessageThread = { otherAgentId: string; lastMessage: DirectMessage };
@@ -235,6 +275,14 @@ export async function createAgent(data: {
   model?: string;
   systemPrompt?: string;
   envVars?: Record<string, string>;
+  role?: AgentRole;
+  responsibilities?: string[];
+  capabilities?: AgentCapability[];
+  workingStyle?: AgentWorkingStyle;
+  handoffPreference?: string;
+  constraints?: string[];
+  examples?: string[];
+  permissions?: Partial<AgentPermissions>;
   organization?: AgentOrganization;
   machineId?: string;
 }): Promise<Agent> {
@@ -246,7 +294,7 @@ export async function createAgent(data: {
   return r.json();
 }
 
-export async function patchAgent(agentId: string, data: { runtime?: string; machineId?: string; displayName?: string; description?: string; model?: string; systemPrompt?: string; envVars?: Record<string, string>; organization?: AgentOrganization; autoStart?: boolean }): Promise<Agent> {
+export async function patchAgent(agentId: string, data: { runtime?: string; machineId?: string; displayName?: string; description?: string; model?: string; systemPrompt?: string; envVars?: Record<string, string>; role?: AgentRole; responsibilities?: string[]; capabilities?: AgentCapability[]; workingStyle?: AgentWorkingStyle; handoffPreference?: string; constraints?: string[]; examples?: string[]; permissions?: Partial<AgentPermissions>; organization?: AgentOrganization; autoStart?: boolean }): Promise<Agent> {
   const r = await apiFetch(`${API_BASE}/api/agents/${agentId}`, {
     method: 'PATCH',
     headers: authHeaders({ 'Content-Type': 'application/json' }),

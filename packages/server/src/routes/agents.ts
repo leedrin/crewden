@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
 import { getStore } from '../db.js';
 import { eventBus } from '../events.js';
-import { CreateAgentDelegationRequestSchema, CreateAgentRequestSchema, CreateDirectMessageRequestSchema, CreateReminderRequestSchema, PatchAgentRequestSchema, PatchReminderRequestSchema, type Agent, type DirectMessage } from '@crewden/shared';
+import { AgentCapabilitySchema, AgentRoleSchema, CreateAgentDelegationRequestSchema, CreateAgentRequestSchema, CreateDirectMessageRequestSchema, CreateReminderRequestSchema, PatchAgentRequestSchema, PatchReminderRequestSchema, type Agent, type DirectMessage } from '@crewden/shared';
 import { delegateAgent } from '../delegation.js';
 import { buildOpenTaskSummary } from '../taskDelivery.js';
 import { validateAgentPatch } from '../runtime/validate-agent-patch.js';
@@ -11,8 +11,44 @@ import { deliverWithRetry } from '../runtime/delivery-reliability.js';
 import { isRuntimeSupported, markUnsupportedRuntime, unsupportedRuntimeError } from '../runtime/runtime-support.js';
 
 export async function agentRoutes(app: FastifyInstance) {
-  app.get('/api/agents', async () => {
-    return getStore().listAgents();
+  app.get<{ Querystring: { role?: string; capability?: string } }>('/api/agents', async (req, reply) => {
+    const role = req.query.role ? AgentRoleSchema.safeParse(req.query.role) : undefined;
+    if (role && !role.success) return reply.status(400).send({ error: 'Invalid role' });
+    const capability = req.query.capability ? AgentCapabilitySchema.safeParse(req.query.capability) : undefined;
+    if (capability && !capability.success) return reply.status(400).send({ error: 'Invalid capability' });
+    return getStore().listAgents({
+      role: role?.success ? role.data : undefined,
+      capability: capability?.success ? capability.data : undefined,
+    });
+  });
+
+  app.get<{ Querystring: { role?: string; capabilities?: string; excludeAgentId?: string; mustBeIdle?: string; maxResults?: string } }>('/api/agents/resolve', async (req, reply) => {
+    const role = req.query.role ? AgentRoleSchema.safeParse(req.query.role) : undefined;
+    if (role && !role.success) return reply.status(400).send({ error: 'Invalid role' });
+    const capabilities = (req.query.capabilities ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const normalizedCapabilities: Array<ReturnType<typeof AgentCapabilitySchema.parse>> = [];
+    for (const capability of capabilities) {
+      const parsed = AgentCapabilitySchema.safeParse(capability);
+      if (!parsed.success) return reply.status(400).send({ error: `Invalid capability: ${capability}` });
+      normalizedCapabilities.push(parsed.data);
+    }
+    const mustBeIdle = req.query.mustBeIdle === undefined
+      ? undefined
+      : req.query.mustBeIdle === 'true' || req.query.mustBeIdle === '1';
+    const maxResults = req.query.maxResults ? Number(req.query.maxResults) : undefined;
+    if (maxResults !== undefined && (!Number.isInteger(maxResults) || maxResults <= 0)) {
+      return reply.status(400).send({ error: 'Invalid maxResults' });
+    }
+    return getStore().resolveAgentsByProfile({
+      role: role?.success ? role.data : undefined,
+      capabilities: normalizedCapabilities.length > 0 ? normalizedCapabilities : undefined,
+      excludeAgentId: req.query.excludeAgentId,
+      mustBeIdle,
+      maxResults,
+    });
   });
 
   app.get<{ Params: { id: string } }>('/api/agents/:id', async (req, reply) => {
@@ -76,7 +112,7 @@ export async function agentRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
     }
-    const { name, displayName, description, runtime, model, systemPrompt, machineId, organization } = parsed.data;
+    const { name, displayName, description, runtime, model, systemPrompt, machineId, organization, role, responsibilities, capabilities, workingStyle, handoffPreference, constraints, examples, permissions } = parsed.data;
     if (!isRuntimeSupported(runtime)) {
       return reply.status(422).send({ error: unsupportedRuntimeError(runtime) });
     }
@@ -89,6 +125,14 @@ export async function agentRoutes(app: FastifyInstance) {
       runtime,
       model,
       systemPrompt,
+      role: role ?? 'unassigned',
+      responsibilities,
+      capabilities,
+      workingStyle,
+      handoffPreference,
+      constraints,
+      examples,
+      permissions,
       organization,
       machineId,
       status: 'inactive',

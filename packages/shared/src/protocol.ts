@@ -3,6 +3,35 @@ import type { VersionInfo } from './version.js';
 export type RuntimeId = 'claude' | 'codex' | 'gemini' | 'opencode' | 'pi';
 
 export type AgentStatus = 'inactive' | 'starting' | 'running' | 'working' | 'idle' | 'error';
+export type AgentRole =
+  | 'unassigned'
+  | 'product'
+  | 'architect'
+  | 'developer'
+  | 'qa'
+  | 'reviewer'
+  | 'security'
+  | 'devops'
+  | 'documentation'
+  | 'coordinator'
+  | 'planner';
+export type AgentCapability = 'requirements' | 'coding' | 'review' | 'testing' | 'security' | 'deployment' | 'docs' | 'research' | 'planning';
+export type AgentWorkingStyle = 'execution' | 'planning' | 'reviewing' | 'researching';
+export type AgentPermissions = {
+  readChannels: string[];
+  writeChannels: string[];
+  createDocs: boolean;
+  createTasks: boolean;
+  claimTasks: boolean;
+  createBranches: boolean;
+  createPrs: boolean;
+  mergeToMain: boolean;
+  deployToProd: boolean;
+  accessSensitiveData: boolean;
+  callExternalApis: string[];
+  maxContextTokens: number;
+  requiresApprovalFor: string[];
+};
 
 export type AgentActivity = {
   id: string;
@@ -418,6 +447,14 @@ export type Agent = {
   model?: string;
   systemPrompt?: string;
   envVars?: Record<string, string>;
+  role?: AgentRole;
+  responsibilities?: string[];
+  capabilities?: AgentCapability[];
+  workingStyle?: AgentWorkingStyle;
+  handoffPreference?: string;
+  constraints?: string[];
+  examples?: string[];
+  permissions?: AgentPermissions;
   organization?: {
     department?: string;
     roles?: string[];
@@ -432,6 +469,20 @@ export type Agent = {
   status: AgentStatus;
   autoStart?: boolean;
   createdAt: string;
+};
+
+export type AgentMatchQuery = {
+  role?: AgentRole;
+  capabilities?: AgentCapability[];
+  excludeAgentId?: string;
+  mustBeIdle?: boolean;
+  maxResults?: number;
+};
+
+export type AgentMatchResult = {
+  agent: Agent;
+  score: number;
+  matchReason: string[];
 };
 
 export type BrowserEvent =

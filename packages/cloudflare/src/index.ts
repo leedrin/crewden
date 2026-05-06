@@ -80,7 +80,7 @@ import {
   StartGoalAlignmentRequestSchema,
   TaskStatusSchema,
 } from '@crewden/shared';
-import { buildClarifyingQuestions, findDuplicateMachineIds, inferGoalRiskLevel, recommendAgentsForGoal, resolveAgentReference, resolveStartMachineId, toAgentDelivery, toRuntimeConfig } from '@crewden/hub-core';
+import { buildClarifyingQuestions, findDuplicateMachineIds, inferGoalRiskLevel, recommendAgentsForGoal, resolveAgentReference, resolveAgents, resolveStartMachineId, toAgentDelivery, toRuntimeConfig } from '@crewden/hub-core';
 
 type SocketAttachment =
   | { kind: 'browser' }
@@ -1578,7 +1578,16 @@ export class CrewdenHub extends DurableObject<Env> {
     if (request.method === 'GET' && path === '/agents/resolve') {
       const parsed = InternalAgentResolveRequestSchema.safeParse(Object.fromEntries(url.searchParams.entries()));
       if (!parsed.success) return json({ error: 'Invalid query', issues: parsed.error.issues }, 400);
-      return json(resolveAgentReference(parsed.data.query, this.listAgents()));
+      if (parsed.data.query && !parsed.data.role && (!parsed.data.capabilities || parsed.data.capabilities.length === 0)) {
+        return json(resolveAgentReference(parsed.data.query, this.listAgents()));
+      }
+      return json(resolveAgents(this.listAgents(), {
+        role: parsed.data.role,
+        capabilities: parsed.data.capabilities,
+        excludeAgentId: parsed.data.excludeAgentId,
+        mustBeIdle: parsed.data.mustBeIdle,
+        maxResults: parsed.data.maxResults,
+      }));
     }
 
     const internalAgentPatchMatch = path.match(/^\/agents\/([^/]+)$/);

@@ -48,6 +48,7 @@ import { matchesAgentCapability } from '../taskMatching.js';
 import { archiveGoal } from './knowledge.js';
 import { validateAgentPatch } from '../runtime/validate-agent-patch.js';
 import { deliverToAgent } from '../runtime/delivery.js';
+import { canAgentWriteChannel, requireAgentPermission } from '../agentPermissions.js';
 
 export async function internalAgentRoutes(app: FastifyInstance) {
   app.addHook('preHandler', async (req, reply) => {
@@ -97,12 +98,21 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     return reply.status(201).send(channel);
   });
 
-  app.get<{ Params: { agentId: string }; Querystring: { query?: string } }>('/internal/agent/:agentId/agents/resolve', async (req, reply) => {
+  app.get<{ Params: { agentId: string }; Querystring: { query?: string; role?: string; capabilities?: string | string[]; excludeAgentId?: string; mustBeIdle?: boolean; maxResults?: number } }>('/internal/agent/:agentId/agents/resolve', async (req, reply) => {
     const agent = await getStore().getAgent(req.params.agentId);
     if (!agent) return reply.status(404).send({ error: 'Agent not found' });
     const parsed = InternalAgentResolveRequestSchema.safeParse(req.query);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid query', issues: parsed.error.issues });
-    return getStore().resolveAgent(parsed.data.query);
+    if (parsed.data.query && !parsed.data.role && (!parsed.data.capabilities || parsed.data.capabilities.length === 0)) {
+      return getStore().resolveAgent(parsed.data.query);
+    }
+    return getStore().resolveAgentsByProfile({
+      role: parsed.data.role,
+      capabilities: parsed.data.capabilities,
+      excludeAgentId: parsed.data.excludeAgentId,
+      mustBeIdle: parsed.data.mustBeIdle,
+      maxResults: parsed.data.maxResults,
+    });
   });
 
   app.patch<{ Params: { agentId: string; targetAgentId: string } }>('/internal/agent/:agentId/agents/:targetAgentId', async (req, reply) => {
@@ -112,6 +122,12 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     if (!target) return reply.status(404).send({ error: 'Target agent not found' });
     const parsed = PatchAgentRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
+    if (
+      req.params.agentId === req.params.targetAgentId &&
+      (parsed.data.role !== undefined || parsed.data.capabilities !== undefined || parsed.data.permissions !== undefined)
+    ) {
+      return reply.status(403).send({ error: 'Agents cannot modify their own role/capabilities/permissions' });
+    }
     const runtimeError = validateAgentPatch(target, parsed.data);
     if (runtimeError) return reply.status(runtimeError.statusCode).send({ error: runtimeError.error });
     const updated = await store.updateAgent(target.id, parsed.data);
@@ -131,6 +147,9 @@ export async function internalAgentRoutes(app: FastifyInstance) {
 
     const channel = await findChannel(parsed.data.channel);
     if (!channel) return reply.status(404).send({ error: 'Channel not found' });
+    if (!(await canAgentWriteChannel(agent.id, channel.id))) {
+      return reply.status(403).send({ error: 'Agent does not have permission: write_channels' });
+    }
     let threadRootId = parsed.data.threadRootId;
     if (threadRootId) {
       const thread = await store.getThread(threadRootId);
@@ -237,6 +256,9 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     const store = getStore();
     const agent = await store.getAgent(req.params.agentId);
     if (!agent) return reply.status(404).send({ error: 'Agent not found' });
+    if (!(await requireAgentPermission(agent.id, 'createTasks'))) {
+      return reply.status(403).send({ error: 'Agent does not have permission: create_tasks' });
+    }
     const parsed = InternalTaskCreateRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
     const channel = await findChannel(parsed.data.channel);
@@ -307,6 +329,9 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     const store = getStore();
     const agent = await store.getAgent(req.params.agentId);
     if (!agent) return reply.status(404).send({ error: 'Agent not found' });
+    if (!(await requireAgentPermission(agent.id, 'createDocs'))) {
+      return reply.status(403).send({ error: 'Agent does not have permission: create_docs' });
+    }
     const parsed = CreateKnowledgeEntryRequestSchema.safeParse({ ...((req.body ?? {}) as object), ownerAgentId: (req.body as { ownerAgentId?: string } | undefined)?.ownerAgentId ?? agent.id });
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
     if (parsed.data.sourceRefs.length === 0 && !parsed.data.allowNoSource) return reply.status(400).send({ error: 'sourceRefs are required unless allowNoSource is true' });
@@ -683,6 +708,9 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     const store = getStore();
     const agent = await store.getAgent(req.params.agentId);
     if (!agent) return reply.status(404).send({ error: 'Agent not found' });
+    if (!(await requireAgentPermission(agent.id, 'claimTasks'))) {
+      return reply.status(403).send({ error: 'Agent does not have permission: claim_tasks' });
+    }
     const existing = await store.getTask(req.params.taskId);
     if (!existing) return reply.status(404).send({ error: 'Task not found' });
     if (existing.assigneeId && existing.assigneeId !== agent.id) return reply.status(409).send({ error: 'Task is assigned to another agent' });

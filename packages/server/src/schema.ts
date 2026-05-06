@@ -166,12 +166,36 @@ export const agents = sqliteTable('agents', {
   model: text('model'),
   systemPrompt: text('system_prompt'),
   envVars: text('env_vars'),
+  role: text('role'),
+  responsibilities: text('responsibilities'),
+  capabilities: text('capabilities'),
+  workingStyle: text('working_style'),
+  handoffPreference: text('handoff_preference'),
+  constraintsText: text('constraints_text'),
+  examples: text('examples'),
   organization: text('organization'),
   machineId: text('machine_id'),
   runtimeInstanceId: text('runtime_instance_id'),
   status: text('status').notNull(),
   autoStart: integer('auto_start', { mode: 'boolean' }).notNull().default(false),
   createdAt: text('created_at').notNull(),
+});
+
+export const agentPermissions = sqliteTable('agent_permissions', {
+  agentId: text('agent_id').primaryKey(),
+  readChannels: text('read_channels'),
+  writeChannels: text('write_channels'),
+  createDocs: integer('create_docs', { mode: 'boolean' }).notNull().default(false),
+  createTasks: integer('create_tasks', { mode: 'boolean' }).notNull().default(true),
+  claimTasks: integer('claim_tasks', { mode: 'boolean' }).notNull().default(true),
+  createBranches: integer('create_branches', { mode: 'boolean' }).notNull().default(false),
+  createPrs: integer('create_prs', { mode: 'boolean' }).notNull().default(false),
+  mergeToMain: integer('merge_to_main', { mode: 'boolean' }).notNull().default(false),
+  deployToProd: integer('deploy_to_prod', { mode: 'boolean' }).notNull().default(false),
+  accessSensitiveData: integer('access_sensitive_data', { mode: 'boolean' }).notNull().default(false),
+  callExternalApis: text('call_external_apis'),
+  maxContextTokens: integer('max_context_tokens').notNull().default(100000),
+  requiresApprovalFor: text('requires_approval_for'),
 });
 
 export const machines = sqliteTable('machines', {

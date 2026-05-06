@@ -214,6 +214,34 @@ describe('POST /api/agents', () => {
     await app.close();
   });
 
+  it('creates an agent with identity v2 profile and permissions', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/agents',
+      payload: {
+        name: 'dev-agent',
+        runtime: 'codex',
+        role: 'developer',
+        capabilities: ['coding', 'review'],
+        responsibilities: ['ship v2.1'],
+        permissions: {
+          writeChannels: ['general'],
+          createTasks: true,
+          createDocs: false,
+        },
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({
+      role: 'developer',
+      capabilities: ['coding', 'review'],
+      responsibilities: ['ship v2.1'],
+      permissions: { writeChannels: ['general'], createTasks: true, createDocs: false },
+    });
+    await app.close();
+  });
+
   it('returns 400 without required fields', async () => {
     const app = await buildApp();
     const res = await app.inject({
@@ -322,6 +350,27 @@ describe('PATCH /api/agents/:id', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().organization.roles).toEqual(['PM']);
+    await app.close();
+  });
+
+  it('updates role/capabilities/permissions', async () => {
+    const app = await buildApp();
+    const created = await app.inject({ method: 'POST', url: '/api/agents', payload: { name: 'a', runtime: 'claude' } });
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/agents/${created.json().id}`,
+      payload: {
+        role: 'qa',
+        capabilities: ['testing'],
+        permissions: { createDocs: true, createTasks: false },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      role: 'qa',
+      capabilities: ['testing'],
+      permissions: { createDocs: true, createTasks: false },
+    });
     await app.close();
   });
 
@@ -475,6 +524,54 @@ describe('GET /api/agents', () => {
     expect(res.json()).toHaveLength(1);
     await app.close();
   });
+
+  it('supports role/capability filters', async () => {
+    const app = await buildApp();
+    await app.inject({
+      method: 'POST',
+      url: '/api/agents',
+      payload: { name: 'dev', runtime: 'codex', role: 'developer', capabilities: ['coding'] },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/agents',
+      payload: { name: 'qa', runtime: 'claude', role: 'qa', capabilities: ['testing'] },
+    });
+    const byRole = await app.inject({ method: 'GET', url: '/api/agents?role=developer' });
+    expect(byRole.statusCode).toBe(200);
+    expect(byRole.json()).toHaveLength(1);
+    expect(byRole.json()[0].name).toBe('dev');
+
+    const byCapability = await app.inject({ method: 'GET', url: '/api/agents?capability=testing' });
+    expect(byCapability.statusCode).toBe(200);
+    expect(byCapability.json()).toHaveLength(1);
+    expect(byCapability.json()[0].name).toBe('qa');
+    await app.close();
+  });
+});
+
+describe('GET /api/agents/resolve', () => {
+  it('resolves by role and capabilities with ranking', async () => {
+    const app = await buildApp();
+    const idle = await app.inject({
+      method: 'POST',
+      url: '/api/agents',
+      payload: { name: 'dev-idle', runtime: 'codex', role: 'developer', capabilities: ['coding', 'review'] },
+    });
+    const busy = await app.inject({
+      method: 'POST',
+      url: '/api/agents',
+      payload: { name: 'dev-busy', runtime: 'codex', role: 'developer', capabilities: ['coding'] },
+    });
+    await getStore().updateAgentStatus(idle.json().id, 'idle');
+    await getStore().updateAgentStatus(busy.json().id, 'working');
+
+    const res = await app.inject({ method: 'GET', url: '/api/agents/resolve?role=developer&capabilities=coding&mustBeIdle=true' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toHaveLength(1);
+    expect(res.json()[0].agent.name).toBe('dev-idle');
+    await app.close();
+  });
 });
 
 describe('GET /api/agents/:id/activities', () => {
@@ -534,6 +631,21 @@ describe('agent internal API', () => {
       displayName: 'Bot',
       runtime: 'claude',
       status: 'idle',
+      permissions: {
+        readChannels: [],
+        writeChannels: [],
+        createDocs: true,
+        createTasks: true,
+        claimTasks: true,
+        createBranches: false,
+        createPrs: false,
+        mergeToMain: false,
+        deployToProd: false,
+        accessSensitiveData: false,
+        callExternalApis: [],
+        maxContextTokens: 100000,
+        requiresApprovalFor: [],
+      },
       createdAt: new Date().toISOString(),
     });
     const token = (await store.getOrCreateAgentToken('agent-1')).token;
@@ -918,6 +1030,70 @@ describe('agent internal API', () => {
     const archived = await app.inject({ method: 'POST', url: '/internal/agent/agent-1/goals/goal-internal/archive', headers });
     expect(archived.statusCode).toBe(201);
     expect(archived.json()).toMatchObject({ kind: 'project_archive', ownerAgentId: 'agent-1' });
+    await app.close();
+  });
+
+  it('enforces internal agent permissions for create task / send message / knowledge', async () => {
+    const { app, store, headers } = await createInternalAgent();
+    await store.updateAgent('agent-1', {
+      permissions: {
+        readChannels: [],
+        writeChannels: ['restricted'],
+        createDocs: false,
+        createTasks: false,
+        claimTasks: true,
+        createBranches: false,
+        createPrs: false,
+        mergeToMain: false,
+        deployToProd: false,
+        accessSensitiveData: false,
+        callExternalApis: [],
+        maxContextTokens: 100000,
+        requiresApprovalFor: [],
+      },
+    });
+
+    const createTaskDenied = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/agent-1/tasks/create',
+      headers,
+      payload: { channel: 'general', title: 'should fail' },
+    });
+    expect(createTaskDenied.statusCode).toBe(403);
+
+    const writeDenied = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/agent-1/messages/send',
+      headers,
+      payload: { channel: 'general', content: 'blocked write' },
+    });
+    expect(writeDenied.statusCode).toBe(403);
+
+    const knowledgeDenied = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/agent-1/knowledge',
+      headers,
+      payload: {
+        kind: 'runbook',
+        title: 'nope',
+        summary: 'nope',
+        body: 'nope',
+        sourceRefs: ['test:1'],
+      },
+    });
+    expect(knowledgeDenied.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it('prevents an agent from changing its own role/capabilities/permissions', async () => {
+    const { app, headers } = await createInternalAgent();
+    const denied = await app.inject({
+      method: 'PATCH',
+      url: '/internal/agent/agent-1/agents/agent-1',
+      headers,
+      payload: { role: 'developer' },
+    });
+    expect(denied.statusCode).toBe(403);
     await app.close();
   });
 });
