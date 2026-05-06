@@ -12,10 +12,11 @@ import { eventBus } from '../events.js';
 import { notifyTaskAssignee } from '../taskDelivery.js';
 
 export async function goalRoutes(app: FastifyInstance) {
-  app.get<{ Querystring: { channelId?: string; status?: string } }>('/api/goals', async (req, reply) => {
+  app.get<{ Querystring: { projectId?: string; channelId?: string; status?: string } }>('/api/goals', async (req, reply) => {
     const status = req.query.status === undefined ? undefined : GoalBriefStatusSchema.safeParse(req.query.status);
     if (status && !status.success) return reply.status(400).send({ error: 'Invalid status' });
     return getStore().listGoals({
+      projectId: req.query.projectId,
       channelId: req.query.channelId,
       status: status?.success ? status.data : undefined,
     });
@@ -24,7 +25,7 @@ export async function goalRoutes(app: FastifyInstance) {
   app.post('/api/goals', async (req, reply) => {
     const parsed = CreateGoalBriefRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
-    const channel = await getStore().getChannel(parsed.data.channelId);
+    const channel = await getStore().getChannel(parsed.data.channelId, { projectId: parsed.data.projectId });
     if (!channel) return reply.status(404).send({ error: 'Channel not found' });
     if (parsed.data.sourceMessageId) {
       const message = await getStore().getMessage(parsed.data.sourceMessageId);
@@ -34,6 +35,7 @@ export async function goalRoutes(app: FastifyInstance) {
 
     const goal = await getStore().createGoal({
       id: nanoid(),
+      projectId: channel.projectId,
       channelId: channel.id,
       sourceMessageId: parsed.data.sourceMessageId,
       requesterName: parsed.data.requesterName,
@@ -52,7 +54,7 @@ export async function goalRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>('/api/goals/:id', async (req, reply) => {
     const goal = await getStore().getGoal(req.params.id);
     if (!goal) return reply.status(404).send({ error: 'Goal not found' });
-    const tasks = await getStore().listTasks({ channelId: goal.channelId });
+    const tasks = await getStore().listTasks({ projectId: goal.projectId, channelId: goal.channelId });
     return { goal, tasks: tasks.filter((task) => task.context?.goalId === goal.id) };
   });
 
@@ -74,6 +76,7 @@ export async function goalRoutes(app: FastifyInstance) {
     for (const draft of parsed.data.tasks) {
       const task = await getStore().createTask({
         id: nanoid(),
+        projectId: goal.projectId,
         channelId: goal.channelId,
         messageId: goal.sourceMessageId,
         title: draft.title,
@@ -118,6 +121,7 @@ export async function goalRoutes(app: FastifyInstance) {
 
     const goal = await store.createGoal({
       id: nanoid(),
+      projectId: message.projectId,
       channelId: message.channelId,
       sourceMessageId: message.id,
       requesterName: parsed.data.requesterName,

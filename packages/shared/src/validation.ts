@@ -160,8 +160,19 @@ export const TaskContextSchema = z.object({
   relatedDocumentIds: z.array(z.string().min(1)).optional(),
 }).partial();
 
+export const ProjectSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  slug: z.string().min(1),
+  description: z.string(),
+  paseoProjectId: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
 export const KnowledgeEntrySchema = z.object({
   id: z.string(),
+  projectId: z.string().min(1).default('default'),
   kind: KnowledgeKindSchema,
   title: z.string().min(1),
   summary: z.string().min(1),
@@ -176,6 +187,7 @@ export const KnowledgeEntrySchema = z.object({
 });
 
 export const CreateKnowledgeEntryRequestSchema = z.object({
+  projectId: z.string().min(1).default('default'),
   kind: KnowledgeKindSchema,
   title: z.string().min(1),
   summary: z.string().min(1),
@@ -212,6 +224,7 @@ export const SearchKnowledgeRequestSchema = z.object({
 
 export const TaskSchema = z.object({
   id: z.string(),
+  projectId: z.string().min(1).default('default'),
   channelId: z.string(),
   messageId: z.string().optional(),
   title: z.string(),
@@ -238,6 +251,7 @@ export const TaskSchema = z.object({
 
 export const MessageSchema = z.object({
   id: z.string(),
+  projectId: z.string().min(1).default('default'),
   channelId: z.string(),
   agentId: z.string().optional(),
   actorType: ActorTypeSchema,
@@ -253,6 +267,7 @@ export const MessageSchema = z.object({
 
 export const AuditLogEntrySchema = z.object({
   id: z.string(),
+  projectId: z.string().min(1).default('default'),
   actorType: ActorTypeSchema,
   actorId: z.string().min(1),
   action: z.string().min(1),
@@ -264,6 +279,7 @@ export const AuditLogEntrySchema = z.object({
 
 export const GoalBriefSchema = z.object({
   id: z.string(),
+  projectId: z.string().min(1).default('default'),
   channelId: z.string(),
   sourceMessageId: z.string().optional(),
   requesterName: z.string(),
@@ -280,6 +296,7 @@ export const GoalBriefSchema = z.object({
 
 export const ReminderSchema = z.object({
   id: z.string(),
+  projectId: z.string().min(1).default('default'),
   agentId: z.string(),
   channelId: z.string(),
   message: z.string(),
@@ -385,6 +402,7 @@ export const DaemonToServerSchema = z.discriminatedUnion('type', [
 ]);
 
 export const CreateAgentRequestSchema = z.object({
+  projectId: z.string().min(1).default('default'),
   name: z.string().min(1),
   runtime: RuntimeIdSchema,
   displayName: z.string().optional(),
@@ -456,11 +474,13 @@ export const CreateMessageRequestSchema = z.object({
 });
 
 export const CreateChannelRequestSchema = z.object({
+  projectId: z.string().min(1).default('default'),
   name: z.string().trim().min(1).max(80).refine((value) => !/[\r\n\t]/.test(value), 'Channel name cannot contain control characters'),
 });
 
 export const SearchRequestSchema = z.object({
   q: z.string().trim().min(1),
+  projectId: z.string().optional(),
   limit: z.coerce.number().int().positive().max(50).default(20),
 });
 
@@ -475,6 +495,7 @@ export const CreateAgentDelegationRequestSchema = z.object({
 });
 
 export const CreateTaskRequestSchema = z.object({
+  projectId: z.string().min(1).default('default'),
   channelId: z.string().min(1).default('general'),
   messageId: z.string().optional(),
   title: z.string().min(1).max(200),
@@ -521,6 +542,7 @@ export const PatchTaskRequestSchema = z
   });
 
 export const CreateReminderRequestSchema = z.object({
+  projectId: z.string().min(1).default('default'),
   channelId: z.string().min(1).default('general'),
   message: z.string().min(1),
   triggerAt: z.string().datetime(),
@@ -541,6 +563,7 @@ export const MessageToTaskRequestSchema = z.object({
 const GoalTextArraySchema = z.array(z.string().min(1)).default([]);
 
 export const CreateGoalBriefRequestSchema = z.object({
+  projectId: z.string().min(1).default('default'),
   channelId: z.string().min(1).default('general'),
   sourceMessageId: z.string().optional(),
   requesterName: z.string().min(1).default('user'),
@@ -591,6 +614,7 @@ export const GoalAlignmentTaskDraftSchema = GoalTaskDraftSchema.extend({
 
 export const GoalAlignmentSchema = z.object({
   id: z.string(),
+  projectId: z.string().min(1).default('default'),
   channelId: z.string(),
   threadRootId: z.string(),
   sourceMessageId: z.string(),
@@ -620,6 +644,7 @@ export const DecisionParticipantSchema = z.object({
 
 export const DecisionSchema = z.object({
   id: z.string(),
+  projectId: z.string().min(1).default('default'),
   channelId: z.string(),
   sourceThreadId: z.string().optional(),
   title: z.string().min(1),
@@ -638,6 +663,7 @@ export const DecisionSchema = z.object({
 });
 
 export const CreateDecisionRequestSchema = z.object({
+  projectId: z.string().min(1).default('default'),
   channelId: z.string().min(1),
   sourceThreadId: z.string().optional(),
   title: z.string().min(1).max(200),
@@ -678,6 +704,7 @@ export const DocumentReviewerSchema = z.object({
 
 export const DocumentSchema = z.object({
   id: z.string(),
+  projectId: z.string().min(1).default('default'),
   kind: DocumentKindSchema,
   title: z.string().min(1),
   status: DocumentStatusSchema,
@@ -696,6 +723,7 @@ export const DocumentSchema = z.object({
 });
 
 export const CreateDocumentRequestSchema = z.object({
+  projectId: z.string().min(1).default('default'),
   kind: DocumentKindSchema,
   title: z.string().min(1).max(200),
   content: z.string().default(''),
@@ -898,6 +926,7 @@ export const InternalChannelCreateRequestSchema = z.object({
 });
 
 export const InternalGoalCreateRequestSchema = z.object({
+  projectId: z.string().min(1).default('default'),
   channel: z.string().min(1).default('general'),
   objective: z.string().min(1),
   background: z.array(z.string().min(1)).default([]),
@@ -910,6 +939,24 @@ export const InternalGoalCreateRequestSchema = z.object({
 export const InternalGoalCreateTasksRequestSchema = CreateGoalTasksRequestSchema;
 export const InternalGoalAlignRequestSchema = StartGoalAlignmentRequestSchema;
 export const InternalGoalAlignmentPatchRequestSchema = PatchGoalAlignmentRequestSchema;
+
+export const CreateProjectRequestSchema = z.object({
+  name: z.string().min(1),
+  slug: z.string().min(1),
+  description: z.string().default(''),
+  paseoProjectId: z.string().optional(),
+});
+
+export const PatchProjectRequestSchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    slug: z.string().min(1).optional(),
+    description: z.string().optional(),
+    paseoProjectId: z.string().optional(),
+  })
+  .refine((value) => Object.values(value).some((item) => item !== undefined), {
+    message: 'At least one field must be provided',
+  });
 
 export type CreateAgentRequest = z.infer<typeof CreateAgentRequestSchema>;
 export type PatchAgentRequest = z.infer<typeof PatchAgentRequestSchema>;
@@ -933,6 +980,8 @@ export type CreateDocumentRequest = z.infer<typeof CreateDocumentRequestSchema>;
 export type PatchDocumentRequest = z.infer<typeof PatchDocumentRequestSchema>;
 export type SubmitDocumentReviewRequest = z.infer<typeof SubmitDocumentReviewRequestSchema>;
 export type ApproveDocumentRequest = z.infer<typeof ApproveDocumentRequestSchema>;
+export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>;
+export type PatchProjectRequest = z.infer<typeof PatchProjectRequestSchema>;
 export type TaskContextRequest = z.infer<typeof TaskContextSchema>;
 export type InternalMessageSendRequest = z.infer<typeof InternalMessageSendRequestSchema>;
 export type InternalMessageReadRequest = z.infer<typeof InternalMessageReadRequestSchema>;

@@ -4,12 +4,13 @@ import { ApproveDocumentRequestSchema, CreateDocumentRequestSchema, DocumentKind
 import { getStore } from '../db.js';
 
 export async function documentRoutes(app: FastifyInstance) {
-  app.get<{ Querystring: { kind?: string; status?: string; channelId?: string } }>('/api/documents', async (req, reply) => {
+  app.get<{ Querystring: { projectId?: string; kind?: string; status?: string; channelId?: string } }>('/api/documents', async (req, reply) => {
     const kind = req.query.kind === undefined ? undefined : DocumentKindSchema.safeParse(req.query.kind);
     if (kind && !kind.success) return reply.status(400).send({ error: 'Invalid document kind' });
     const status = req.query.status === undefined ? undefined : DocumentStatusSchema.safeParse(req.query.status);
     if (status && !status.success) return reply.status(400).send({ error: 'Invalid document status' });
     return getStore().listDocuments({
+      projectId: req.query.projectId,
       sourceChannelId: req.query.channelId,
       kind: kind?.success ? kind.data : undefined,
       status: status?.success ? status.data : undefined,
@@ -19,10 +20,11 @@ export async function documentRoutes(app: FastifyInstance) {
   app.post('/api/documents', async (req, reply) => {
     const parsed = CreateDocumentRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
-    const channel = await getStore().getChannel(parsed.data.sourceChannelId);
+    const channel = await getStore().getChannel(parsed.data.sourceChannelId, { projectId: parsed.data.projectId });
     if (!channel) return reply.status(404).send({ error: 'Channel not found' });
     const document = await getStore().createDocument({
       id: nanoid(),
+      projectId: channel.projectId,
       kind: parsed.data.kind,
       title: parsed.data.title,
       status: 'draft',
@@ -36,6 +38,7 @@ export async function documentRoutes(app: FastifyInstance) {
       relatedTasks: parsed.data.relatedTasks,
     });
     await getStore().appendAuditLog({
+      projectId: document.projectId,
       actorType: parsed.data.authorType,
       actorId: parsed.data.authorId,
       action: 'document.created',
@@ -60,6 +63,7 @@ export async function documentRoutes(app: FastifyInstance) {
     const updated = await getStore().updateDocument(existing.id, parsed.data);
     if (!updated) return reply.status(404).send({ error: 'Document not found' });
     await getStore().appendAuditLog({
+      projectId: updated.projectId,
       actorType: 'human',
       actorId: 'user',
       action: 'document.updated',
@@ -79,6 +83,7 @@ export async function documentRoutes(app: FastifyInstance) {
     const updated = await getStore().updateDocument(existing.id, { status: 'in_review', reviewers: parsed.data.reviewers });
     if (!updated) return reply.status(404).send({ error: 'Document not found' });
     await getStore().appendAuditLog({
+      projectId: updated.projectId,
       actorType: 'human',
       actorId: 'user',
       action: 'document.status_changed',
@@ -101,6 +106,7 @@ export async function documentRoutes(app: FastifyInstance) {
     const updated = await getStore().updateDocument(existing.id, { status: 'approved', approvedAt: new Date().toISOString() });
     if (!updated) return reply.status(404).send({ error: 'Document not found' });
     await getStore().appendAuditLog({
+      projectId: updated.projectId,
       actorType: parsed.data.actorType,
       actorId: parsed.data.actorId,
       action: 'document.status_changed',
@@ -118,6 +124,7 @@ export async function documentRoutes(app: FastifyInstance) {
     const updated = await getStore().updateDocument(existing.id, { status: 'deprecated' });
     if (!updated) return reply.status(404).send({ error: 'Document not found' });
     await getStore().appendAuditLog({
+      projectId: updated.projectId,
       actorType: 'human',
       actorId: 'user',
       action: 'document.status_changed',
@@ -140,6 +147,7 @@ export async function documentRoutes(app: FastifyInstance) {
     const updated = await getStore().updateDocument(existing.id, { status: 'superseded', supersededBy: replacement.id });
     if (!updated) return reply.status(404).send({ error: 'Document not found' });
     await getStore().appendAuditLog({
+      projectId: updated.projectId,
       actorType: 'human',
       actorId: 'user',
       action: 'document.status_changed',
@@ -159,6 +167,7 @@ export async function documentRoutes(app: FastifyInstance) {
     if (!parsedKind.success) return reply.status(400).send({ error: 'Invalid document kind' });
     const document = await getStore().createDocument({
       id: nanoid(),
+      projectId: message.projectId,
       kind: parsedKind.data,
       title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : message.content.slice(0, 120),
       status: 'draft',
@@ -172,6 +181,7 @@ export async function documentRoutes(app: FastifyInstance) {
       relatedTasks: Array.isArray(body.relatedTasks) ? body.relatedTasks.filter((item): item is string => typeof item === 'string') : [],
     });
     await getStore().appendAuditLog({
+      projectId: document.projectId,
       actorType: 'human',
       actorId: 'user',
       action: 'document.created',

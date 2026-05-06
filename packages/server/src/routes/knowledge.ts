@@ -7,10 +7,10 @@ import { requireAgentPermission } from '../agentPermissions.js';
 import { resolveActingAgent } from '../requestAgentAuth.js';
 
 export async function knowledgeRoutes(app: FastifyInstance) {
-  app.get('/api/knowledge', async (req, reply) => {
+  app.get<{ Querystring: { projectId?: string; query?: string; kind?: string; tag?: string | string[]; limit?: string } }>('/api/knowledge', async (req, reply) => {
     const parsed = SearchKnowledgeRequestSchema.safeParse(req.query);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid query', issues: parsed.error.issues });
-    return getStore().searchKnowledge(parsed.data);
+    return getStore().searchKnowledge({ ...parsed.data, projectId: req.query.projectId });
   });
 
   app.post('/api/knowledge', async (req, reply) => {
@@ -24,6 +24,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
     if (parsed.data.sourceRefs.length === 0 && !parsed.data.allowNoSource) return reply.status(400).send({ error: 'sourceRefs are required unless allowNoSource is true' });
     const entry = await getStore().createKnowledgeEntry({
       id: nanoid(),
+      projectId: parsed.data.projectId,
       kind: parsed.data.kind,
       title: parsed.data.title,
       summary: parsed.data.summary,
@@ -64,7 +65,7 @@ export async function archiveGoal(goalId: string, ownerAgentId?: string): Promis
   const store = getStore();
   const goal = await store.getGoal(goalId);
   if (!goal) return undefined;
-  const tasks = (await store.listTasks({ channelId: goal.channelId })).filter((task) => task.context?.goalId === goal.id);
+  const tasks = (await store.listTasks({ projectId: goal.projectId, channelId: goal.channelId })).filter((task) => task.context?.goalId === goal.id);
   const reviews = tasks.flatMap((task) => task.context?.reviews ?? []);
   const evidence = reviews.flatMap((review) => review.evidence);
   const body = [
@@ -81,6 +82,7 @@ export async function archiveGoal(goalId: string, ownerAgentId?: string): Promis
   ].join('\n');
   const entry = await store.createKnowledgeEntry({
     id: nanoid(),
+    projectId: goal.projectId,
     kind: 'project_archive',
     title: `Archive: ${goal.objective}`.slice(0, 200),
     summary: `${tasks.length} tasks archived for goal ${goal.id}.`,

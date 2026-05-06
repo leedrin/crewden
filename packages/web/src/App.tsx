@@ -11,12 +11,13 @@ import { GoalAlignmentPanel } from './components/GoalAlignmentPanel.js';
 import { KnowledgePanel } from './components/KnowledgePanel.js';
 import { MobileTopBar } from './components/MobileTopBar.js';
 import { LoginView } from './components/LoginView.js';
-import type { Channel, Message, MessageThread, Agent, Machine, AgentActivity, VersionInfo, Task, Reminder, SearchMessageResult, GoalBrief, GoalAlignment, RuntimeStatus } from './api.js';
-import { AuthError, WEB_COMMIT_SHA, WEB_VERSION, buildWsUrl, getChannels, getMessages, getMessageThread, sendMessage, getAgents, getMachines, getAgentActivities, getHubVersion, getTasks, messageToTask, startGoalAlignment, getAgentReminders, createChannel, deleteChannel, searchMessages, setAuthFailureHandler, verifyAuthToken, getRuntimeStatus } from './api.js';
+import type { Channel, Message, MessageThread, Agent, Machine, AgentActivity, VersionInfo, Task, Reminder, SearchMessageResult, GoalBrief, GoalAlignment, RuntimeStatus, Project } from './api.js';
+import { AuthError, WEB_COMMIT_SHA, WEB_VERSION, buildWsUrl, getProjects, getChannels, getMessages, getMessageThread, sendMessage, getAgents, getMachines, getAgentActivities, getHubVersion, getTasks, messageToTask, startGoalAlignment, getAgentReminders, createChannel, deleteChannel, searchMessages, setAuthFailureHandler, verifyAuthToken, getRuntimeStatus } from './api.js';
 import { clearStoredAuthToken, getEffectiveAuthToken, markSignedOut, setStoredAuthToken } from './auth.js';
 import { notifyBrowser, requestPermission } from './notifications.js';
 
 const LAST_PAGE_KEY = 'crewden_last_page';
+const LAST_PROJECT_ID_KEY = 'crewden_last_project_id';
 
 type MainView = 'channel' | 'tasks' | 'knowledge';
 type StoredPage = {
@@ -32,6 +33,8 @@ export function App() {
   const initialPage = initialPageRef.current;
   const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'login'>('checking');
   const [authError, setAuthError] = useState<string | undefined>();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(() => localStorage.getItem(LAST_PROJECT_ID_KEY) ?? 'default');
   const [channels, setChannels] = useState<Channel[]>([]);
   const [messagesByChannel, setMessagesByChannel] = useState<Record<string, Message[]>>({});
   const [draftsByChannel, setDraftsByChannel] = useState<Record<string, string>>({});
@@ -58,6 +61,7 @@ export function App() {
   const isAuthenticated = authState === 'authenticated';
 
   const resetWorkspaceState = useCallback(() => {
+    setProjects([]);
     setChannels([]);
     setMessagesByChannel({});
     setDraftsByChannel({});
@@ -132,10 +136,20 @@ export function App() {
       });
   }, []);
 
+  const loadProjects = useCallback(async () => {
+    const data = await getProjects();
+    setProjects(data);
+    if (data.length === 0) return;
+    const current = data.find((project) => project.id === selectedProjectId);
+    const fromPath = data.find((project) => project.slug === readProjectSlugFromPath());
+    const fallback = fromPath ?? current ?? data[0];
+    if (fallback.id !== selectedProjectId) setSelectedProjectId(fallback.id);
+  }, [selectedProjectId]);
+
   const loadChannels = useCallback(async () => {
-    const data = await getChannels();
+    const data = await getChannels(selectedProjectId);
     setChannels(data);
-  }, []);
+  }, [selectedProjectId]);
 
   const loadMessages = useCallback(async (channelId: string) => {
     const data = await getMessages(channelId);
@@ -143,9 +157,9 @@ export function App() {
   }, []);
 
   const loadAgents = useCallback(async () => {
-    const data = await getAgents();
+    const data = await getAgents({ projectId: selectedProjectId });
     setAgents(data);
-  }, []);
+  }, [selectedProjectId]);
 
   const loadMachines = useCallback(async () => {
     const data = await getMachines();
@@ -153,9 +167,9 @@ export function App() {
   }, []);
 
   const loadTasks = useCallback(async () => {
-    const data = await getTasks();
+    const data = await getTasks({ projectId: selectedProjectId });
     setTasks(data);
-  }, []);
+  }, [selectedProjectId]);
 
   const loadRuntimeStatus = useCallback(async () => {
     const data = await getRuntimeStatus();
@@ -187,6 +201,7 @@ export function App() {
 
   useEffect(() => {
     if (!isAuthenticated) return;
+    loadProjects();
     loadChannels();
     loadAgents();
     loadMachines();
@@ -194,12 +209,32 @@ export function App() {
     loadRuntimeStatus();
     getHubVersion().then(setHubVersion).catch(() => undefined);
     requestPermission().catch(() => undefined);
-  }, [isAuthenticated, loadAgents, loadChannels, loadMachines, loadRuntimeStatus, loadTasks]);
+  }, [isAuthenticated, loadAgents, loadChannels, loadMachines, loadProjects, loadRuntimeStatus, loadTasks]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
     writeLastPage({ selectedView, selectedChannel, selectedAgentId, rightPanel });
   }, [isAuthenticated, rightPanel, selectedAgentId, selectedChannel, selectedView]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    localStorage.setItem(LAST_PROJECT_ID_KEY, selectedProjectId);
+    const selectedProject = projects.find((project) => project.id === selectedProjectId);
+    if (!selectedProject) return;
+    const nextPath = `/${selectedProject.slug}`;
+    if (window.location.pathname !== nextPath) {
+      window.history.replaceState(null, '', `${nextPath}${window.location.search}${window.location.hash}`);
+    }
+  }, [isAuthenticated, projects, selectedProjectId]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    if (channels.length === 0) return;
+    if (!channels.some((channel) => channel.id === selectedChannel)) {
+      const fallback = channels.find((channel) => channel.id === 'general') ?? channels[0];
+      setSelectedChannel(fallback.id);
+    }
+  }, [channels, isAuthenticated, selectedChannel]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -277,6 +312,7 @@ export function App() {
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'message:new') {
+          if (msg.message.projectId && msg.message.projectId !== selectedProjectId) return;
           if (msg.message.channelId === selectedChannelRef.current) {
             upsertMessage(msg.message);
           }
@@ -287,6 +323,7 @@ export function App() {
             'messages',
           );
         } else if (msg.type === 'thread:message:new') {
+          if (msg.root.projectId && msg.root.projectId !== selectedProjectId) return;
           updateThreadRoot(msg.root);
           setThread((current) => {
             if (!current || current.root.id !== msg.root.id) return current;
@@ -302,6 +339,7 @@ export function App() {
             'messages',
           );
         } else if (msg.type === 'agent:update' || msg.type === 'agent:updated') {
+          if (msg.agent.projectId && msg.agent.projectId !== selectedProjectId) return;
           setAgents((prev) => prev.map((a) => (a.id === msg.agent.id ? msg.agent : a)));
           loadRuntimeStatus();
           const agentStatus: string = msg.agent.status;
@@ -335,6 +373,7 @@ export function App() {
             return [...prev, msg.machine];
           });
         } else if (msg.type === 'task:update') {
+          if (msg.task.projectId && msg.task.projectId !== selectedProjectId) return;
           setTasks((prev) => {
             const exists = prev.find((task) => task.id === msg.task.id);
             if (exists) return prev.map((task) => (task.id === msg.task.id ? msg.task : task));
@@ -350,15 +389,19 @@ export function App() {
             );
           }
         } else if (msg.type === 'goal:update') {
+          if (msg.goal.projectId && msg.goal.projectId !== selectedProjectId) return;
           setGoalDraft((current) => current?.id === msg.goal.id ? msg.goal : current);
         } else if (msg.type === 'goal-alignment:update') {
+          if (msg.alignment.projectId && msg.alignment.projectId !== selectedProjectId) return;
           setGoalAlignment((current) => current?.id === msg.alignment.id ? msg.alignment : current);
         } else if (msg.type === 'channel:created') {
+          if (msg.channel.projectId && msg.channel.projectId !== selectedProjectId) return;
           setChannels((prev) => prev.some((channel) => channel.id === msg.channel.id) ? prev : [...prev, msg.channel]);
         } else if (msg.type === 'channel:deleted') {
           setChannels((prev) => prev.filter((channel) => channel.id !== msg.channelId));
           if (selectedChannelRef.current === msg.channelId) setSelectedChannel('general');
         } else if (msg.type === 'reminder:update') {
+          if (msg.reminder.projectId && msg.reminder.projectId !== selectedProjectId) return;
           setRemindersByAgent((prev) => {
             const current = prev[msg.reminder.agentId] ?? [];
             const exists = current.some((reminder) => reminder.id === msg.reminder.id);
@@ -398,7 +441,7 @@ export function App() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [handleAuthExpired, isAuthenticated, loadAgents, loadChannels, loadMachines, loadMessages, loadRuntimeStatus, loadTasks, updateThreadRoot, upsertMessage]);
+  }, [handleAuthExpired, isAuthenticated, loadAgents, loadChannels, loadMachines, loadMessages, loadRuntimeStatus, loadTasks, selectedProjectId, updateThreadRoot, upsertMessage]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -489,7 +532,7 @@ export function App() {
   };
 
   const handleCreateChannel = async (name: string) => {
-    const channel = await createChannel(name);
+    const channel = await createChannel(name, selectedProjectId);
     setChannels((prev) => prev.some((candidate) => candidate.id === channel.id) ? prev : [...prev, channel]);
     setSelectedView('channel');
     setSelectedChannel(channel.id);
@@ -549,6 +592,8 @@ export function App() {
       {sidebarOpen ? <button type="button" className="mobile-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} /> : null}
       <Sidebar
         className={sidebarOpen ? 'sidebar-mobile-open' : ''}
+        projects={projects}
+        selectedProjectId={selectedProjectId}
         channels={channels}
         agents={agents}
         activitiesByAgent={activitiesByAgent}
@@ -563,6 +608,17 @@ export function App() {
         onSelectTasks={() => { setSelectedView('tasks'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
         onSelectKnowledge={() => { setSelectedView('knowledge'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
         onOpenSearch={() => setSearchOpen(true)}
+        onSelectProject={(projectId) => {
+          setSelectedProjectId(projectId);
+          setSelectedView('channel');
+          setThread(undefined);
+          setThreadTargetMessageId(undefined);
+          setTargetMessageId(undefined);
+          setSelectedAgentId(undefined);
+          setGoalDraft(undefined);
+          setGoalAlignment(undefined);
+          setRightPanel(undefined);
+        }}
         onSelectChannel={(id) => {
           setSelectedView('channel');
           setSelectedChannel(id);
@@ -583,6 +639,7 @@ export function App() {
       <div className="main-pane" style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
         {selectedView === 'tasks' ? (
           <TaskBoard
+            projectId={selectedProjectId}
             tasks={tasks}
             channels={channels}
             agents={agents}
@@ -590,7 +647,7 @@ export function App() {
             onTaskDeleted={(taskId) => setTasks((prev) => prev.filter((task) => task.id !== taskId))}
           />
         ) : selectedView === 'knowledge' ? (
-          <KnowledgePanel />
+          <KnowledgePanel projectId={selectedProjectId} />
         ) : (
           <>
             <ChannelView
@@ -674,6 +731,7 @@ export function App() {
         />
       ) : rightPanel === 'agents' ? (
         <AgentPanel
+          projectId={selectedProjectId}
           agents={agents}
           machines={machines}
           runtimeStatus={runtimeStatus}
@@ -693,6 +751,7 @@ export function App() {
       )}
       {searchOpen ? (
         <SearchOverlay
+          projectId={selectedProjectId}
           onClose={() => setSearchOpen(false)}
           onSelect={handleSearchSelect}
         />
@@ -701,7 +760,7 @@ export function App() {
   );
 }
 
-function SearchOverlay({ onClose, onSelect }: { onClose: () => void; onSelect: (result: SearchMessageResult) => void | Promise<void> }) {
+function SearchOverlay({ projectId, onClose, onSelect }: { projectId: string; onClose: () => void; onSelect: (result: SearchMessageResult) => void | Promise<void> }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchMessageResult[]>([]);
 
@@ -720,10 +779,10 @@ function SearchOverlay({ onClose, onSelect }: { onClose: () => void; onSelect: (
       return;
     }
     const timer = window.setTimeout(() => {
-      searchMessages(trimmed, 20).then((data) => setResults(data.messages)).catch(() => setResults([]));
+      searchMessages(trimmed, 20, projectId).then((data) => setResults(data.messages)).catch(() => setResults([]));
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [query]);
+  }, [projectId, query]);
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'grid', placeItems: 'start center', paddingTop: 80, zIndex: 10 }}>
@@ -783,6 +842,13 @@ function readLastPage(): StoredPage {
   }
 
   return fallback;
+}
+
+function readProjectSlugFromPath(): string | undefined {
+  const trimmed = window.location.pathname.replace(/^\/+|\/+$/g, '');
+  if (!trimmed) return undefined;
+  const [slug] = trimmed.split('/');
+  return slug || undefined;
 }
 
 function writeLastPage(page: StoredPage) {

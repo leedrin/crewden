@@ -1,9 +1,11 @@
 import { useState } from 'react';
-import type { Channel, Agent, AgentActivity, Machine, RuntimeStatus, VersionInfo } from '../api.js';
+import type { Channel, Agent, AgentActivity, Machine, RuntimeStatus, VersionInfo, Project } from '../api.js';
 import { PresenceAvatar, presenceLabel } from './PresenceAvatar.js';
 import { t } from '../i18n.js';
 
 type Props = {
+  projects: Project[];
+  selectedProjectId: string;
   channels: Channel[];
   agents: Agent[];
   activitiesByAgent?: Record<string, AgentActivity[]>;
@@ -18,6 +20,7 @@ type Props = {
   onSelectTasks: () => void;
   onSelectKnowledge: () => void;
   onOpenSearch: () => void;
+  onSelectProject: (projectId: string) => void;
   onSelectChannel: (id: string) => void;
   onCreateChannel: (name: string) => Promise<void>;
   onDeleteChannel: (id: string) => Promise<void>;
@@ -62,7 +65,7 @@ const S = {
   },
 };
 
-export function Sidebar({ channels, agents, activitiesByAgent = {}, machines, runtimeStatus, selectedView, selectedChannel, selectedAgentId, webVersion, hubVersion, taskCount, onSelectTasks, onSelectKnowledge, onOpenSearch, onSelectChannel, onCreateChannel, onDeleteChannel, onSelectAgent, onOpenAgents, className, onNavigate, onSignOut }: Props) {
+export function Sidebar({ projects, selectedProjectId, channels, agents, activitiesByAgent = {}, machines, runtimeStatus, selectedView, selectedChannel, selectedAgentId, webVersion, hubVersion, taskCount, onSelectTasks, onSelectKnowledge, onOpenSearch, onSelectProject, onSelectChannel, onCreateChannel, onDeleteChannel, onSelectAgent, onOpenAgents, className, onNavigate, onSignOut }: Props) {
   const [creating, setCreating] = useState(false);
   const [channelName, setChannelName] = useState('');
   const [channelError, setChannelError] = useState('');
@@ -94,6 +97,30 @@ export function Sidebar({ channels, agents, activitiesByAgent = {}, machines, ru
             </button>
           ) : null}
         </span>
+      </div>
+
+      <div style={{ padding: '8px 10px 4px', borderBottom: '2px solid #000' }}>
+        <select
+          value={selectedProjectId}
+          onChange={(event) => {
+            onSelectProject(event.target.value);
+            onNavigate?.();
+          }}
+          style={{
+            width: '100%',
+            border: '2px solid #000',
+            background: '#fff',
+            color: '#000',
+            fontFamily: "'Courier New', monospace",
+            fontSize: 12,
+            fontWeight: 700,
+            padding: '5px 6px',
+          }}
+        >
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>{project.name}</option>
+          ))}
+        </select>
       </div>
 
       <div style={{ padding: '4px 0' }}>

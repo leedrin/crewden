@@ -4,12 +4,23 @@ import { DecisionStatusSchema, CreateDecisionRequestSchema, DecisionTransitionRe
 import { getStore } from '../db.js';
 
 export async function decisionRoutes(app: FastifyInstance) {
+  app.get<{ Querystring: { projectId?: string; channelId?: string; status?: string } }>('/api/decisions', async (req, reply) => {
+    const status = req.query.status === undefined ? undefined : DecisionStatusSchema.safeParse(req.query.status);
+    if (status && !status.success) return reply.status(400).send({ error: 'Invalid decision status' });
+    return getStore().listDecisions({
+      projectId: req.query.projectId,
+      channelId: req.query.channelId,
+      status: status?.success ? status.data : undefined,
+    });
+  });
+
   app.get<{ Params: { id: string }; Querystring: { status?: string } }>('/api/channels/:id/decisions', async (req, reply) => {
     const status = req.query.status === undefined ? undefined : DecisionStatusSchema.safeParse(req.query.status);
     if (status && !status.success) return reply.status(400).send({ error: 'Invalid decision status' });
     const channel = await getStore().getChannel(req.params.id);
     if (!channel) return reply.status(404).send({ error: 'Channel not found' });
     return getStore().listDecisions({
+      projectId: channel.projectId,
       channelId: channel.id,
       status: status?.success ? status.data : undefined,
     });
@@ -19,10 +30,11 @@ export async function decisionRoutes(app: FastifyInstance) {
     const parsed = CreateDecisionRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
     if (parsed.data.status !== 'proposed') return reply.status(422).send({ error: 'Decision must start in proposed status' });
-    const channel = await getStore().getChannel(parsed.data.channelId);
+    const channel = await getStore().getChannel(parsed.data.channelId, { projectId: parsed.data.projectId });
     if (!channel) return reply.status(404).send({ error: 'Channel not found' });
     const decision = await getStore().createDecision({
       id: nanoid(),
+      projectId: channel.projectId,
       channelId: parsed.data.channelId,
       sourceThreadId: parsed.data.sourceThreadId,
       title: parsed.data.title,
@@ -36,6 +48,7 @@ export async function decisionRoutes(app: FastifyInstance) {
       relatedDecisions: parsed.data.relatedDecisions,
     });
     await getStore().appendAuditLog({
+      projectId: decision.projectId,
       actorType: 'human',
       actorId: 'user',
       action: 'decision.created',
@@ -68,6 +81,7 @@ export async function decisionRoutes(app: FastifyInstance) {
     });
     if (!updated) return reply.status(404).send({ error: 'Decision not found' });
     await getStore().appendAuditLog({
+      projectId: updated.projectId,
       actorType: 'human',
       actorId: 'user',
       action: parsed.data.status ? 'decision.status_changed' : 'decision.updated',
@@ -85,6 +99,7 @@ export async function decisionRoutes(app: FastifyInstance) {
     const updated = await getStore().updateDecision(existing.id, { status: 'deprecated' });
     if (!updated) return reply.status(404).send({ error: 'Decision not found' });
     await getStore().appendAuditLog({
+      projectId: updated.projectId,
       actorType: 'human',
       actorId: 'user',
       action: 'decision.status_changed',
@@ -107,6 +122,7 @@ export async function decisionRoutes(app: FastifyInstance) {
     const updated = await getStore().updateDecision(existing.id, { status: 'superseded', supersededBy: replacement.id });
     if (!updated) return reply.status(404).send({ error: 'Decision not found' });
     await getStore().appendAuditLog({
+      projectId: updated.projectId,
       actorType: 'human',
       actorId: 'user',
       action: 'decision.status_changed',
@@ -126,6 +142,7 @@ export async function decisionRoutes(app: FastifyInstance) {
     const decisionText = typeof body.decisionText === 'string' && body.decisionText.trim() ? body.decisionText.trim() : message.content.slice(0, 500);
     const decision = await getStore().createDecision({
       id: nanoid(),
+      projectId: message.projectId,
       channelId: message.channelId,
       sourceThreadId: message.threadRootId ?? message.id,
       title,
@@ -139,6 +156,7 @@ export async function decisionRoutes(app: FastifyInstance) {
       participants: [],
     });
     await getStore().appendAuditLog({
+      projectId: decision.projectId,
       actorType: 'human',
       actorId: 'user',
       action: 'decision.created',

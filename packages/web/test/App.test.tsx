@@ -797,6 +797,7 @@ vi.mock('../src/api.js', () => ({
   setAuthFailureHandler: vi.fn(),
   verifyAuthToken: vi.fn(async () => ({ authenticated: true, mode: 'anonymous' })),
   getChannels: vi.fn(async () => [{ id: 'general', name: 'general', createdAt: '2026-04-25T00:00:00.000Z' }]),
+  getProjects: vi.fn(async () => [{ id: 'default', name: 'Default Project', slug: 'default', description: '', createdAt: '2026-04-25T00:00:00.000Z', updatedAt: '2026-04-25T00:00:00.000Z' }]),
   getMessages: vi.fn(async () => []),
   getMessageThread: vi.fn(),
   sendMessage: vi.fn(),

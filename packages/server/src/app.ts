@@ -13,6 +13,8 @@ import { knowledgeRoutes } from './routes/knowledge.js';
 import { decisionRoutes } from './routes/decisions.js';
 import { documentRoutes } from './routes/documents.js';
 import { runtimeRoutes } from './routes/runtime.js';
+import { projectRoutes } from './routes/projects.js';
+import { auditRoutes } from './routes/audit.js';
 import { browserSocketHandler } from './ws/browserSocket.js';
 import { initDb, resetVolatileState } from './db.js';
 import { createVersionInfo } from '@crewden/shared';
@@ -60,6 +62,8 @@ export async function buildApp(opts: { logger?: boolean } = {}) {
   await app.register(decisionRoutes);
   await app.register(documentRoutes);
   await app.register(runtimeRoutes);
+  await app.register(projectRoutes);
+  await app.register(auditRoutes);
   await app.register(internalAgentRoutes);
   await app.register(browserSocketHandler);
 

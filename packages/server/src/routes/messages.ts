@@ -48,6 +48,7 @@ export async function messageRoutes(app: FastifyInstance) {
     const mentions = parseMentions(content, await store.listAgents());
     const message = await store.createMessage({
       id: nanoid(),
+      projectId: channel.projectId,
       channelId: req.params.id,
       senderName,
       content,

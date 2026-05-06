@@ -11,12 +11,13 @@ import { deliverWithRetry } from '../runtime/delivery-reliability.js';
 import { isRuntimeSupported, markUnsupportedRuntime, unsupportedRuntimeError } from '../runtime/runtime-support.js';
 
 export async function agentRoutes(app: FastifyInstance) {
-  app.get<{ Querystring: { role?: string; capability?: string } }>('/api/agents', async (req, reply) => {
+  app.get<{ Querystring: { projectId?: string; role?: string; capability?: string } }>('/api/agents', async (req, reply) => {
     const role = req.query.role ? AgentRoleSchema.safeParse(req.query.role) : undefined;
     if (role && !role.success) return reply.status(400).send({ error: 'Invalid role' });
     const capability = req.query.capability ? AgentCapabilitySchema.safeParse(req.query.capability) : undefined;
     if (capability && !capability.success) return reply.status(400).send({ error: 'Invalid capability' });
     return getStore().listAgents({
+      projectId: req.query.projectId,
       role: role?.success ? role.data : undefined,
       capability: capability?.success ? capability.data : undefined,
     });
@@ -68,7 +69,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const store = getStore();
     const agent = await store.getAgent(req.params.id);
     if (!agent) return reply.status(404).send({ error: 'Agent not found' });
-    return store.listReminders(agent.id);
+    return store.listReminders({ projectId: agent.projectId, agentId: agent.id });
   });
 
   app.post<{ Params: { id: string } }>('/api/agents/:id/reminders', async (req, reply) => {
@@ -81,6 +82,7 @@ export async function agentRoutes(app: FastifyInstance) {
     if (!channel) return reply.status(404).send({ error: 'Channel not found' });
     const reminder = await store.createReminder({
       id: nanoid(),
+      projectId: agent.projectId,
       agentId: agent.id,
       channelId: channel.id,
       message: parsed.data.message,
@@ -112,13 +114,16 @@ export async function agentRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
     }
-    const { name, displayName, description, runtime, model, systemPrompt, machineId, organization, role, responsibilities, capabilities, workingStyle, handoffPreference, constraints, examples, permissions } = parsed.data;
+    const { projectId, name, displayName, description, runtime, model, systemPrompt, machineId, organization, role, responsibilities, capabilities, workingStyle, handoffPreference, constraints, examples, permissions } = parsed.data;
+    const project = await getStore().getProject(projectId);
+    if (!project) return reply.status(404).send({ error: 'Project not found' });
     if (!isRuntimeSupported(runtime)) {
       return reply.status(422).send({ error: unsupportedRuntimeError(runtime) });
     }
 
     const agent = await getStore().createAgent({
       id: nanoid(),
+      projectId,
       name,
       displayName,
       description,

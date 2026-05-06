@@ -5,18 +5,20 @@ import { nanoid } from 'nanoid';
 import { drizzle, type LibSQLDatabase } from 'drizzle-orm/libsql';
 import { createClient, type Client } from '@libsql/client';
 import { asc, desc, eq, inArray, or } from 'drizzle-orm';
-import type { ActorType, Channel, Message, MessageThread, Machine, Agent, RuntimeId, AgentStatus, AgentActivity, DirectMessage, DirectMessageThread, AgentDelegation, AgentTokenInfo, Task, TaskStatus, GoalBrief, GoalBriefStatus, GoalAlignment, GoalAlignmentStatus, Reminder, ReminderStatus, SearchMessageResult, KnowledgeEntry, KnowledgeKind, KnowledgeSearchResult, KnowledgeStatus, AgentPermissions, AgentCapability, AgentRole, Decision, DecisionStatus, Document, DocumentStatus, DocumentKind } from '@crewden/shared';
+import type { ActorType, Channel, Message, MessageThread, Machine, Agent, RuntimeId, AgentStatus, AgentActivity, DirectMessage, DirectMessageThread, AgentDelegation, AgentTokenInfo, Task, TaskStatus, GoalBrief, GoalBriefStatus, GoalAlignment, GoalAlignmentStatus, Reminder, ReminderStatus, SearchMessageResult, KnowledgeEntry, KnowledgeKind, KnowledgeSearchResult, KnowledgeStatus, AgentPermissions, AgentCapability, AgentRole, Decision, DecisionStatus, Document, DocumentStatus, DocumentKind, Project } from '@crewden/shared';
 import { resolveAgentReference, resolveAgents } from '@crewden/hub-core';
-import { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, decisions, directMessages, documents, goalAlignments, goals, knowledgeEntries, machines, messages, reminders, tasks } from './schema.js';
+import { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, decisions, directMessages, documents, goalAlignments, goals, knowledgeEntries, machines, messages, projects, reminders, tasks } from './schema.js';
 
 type Database = LibSQLDatabase<typeof import('./schema.js')>;
-type NewMessage = Omit<Message, 'createdAt' | 'actorType' | 'actorId'> & Partial<Pick<Message, 'actorType' | 'actorId'>>;
-type NewTask = Omit<Task, 'createdAt' | 'updatedAt' | 'version' | 'type' | 'creator' | 'owner' | 'reviewer' | 'isBlocked'> &
-  Partial<Pick<Task, 'type' | 'creator' | 'owner' | 'reviewer' | 'isBlocked'>>;
+const DEFAULT_PROJECT_ID = 'default';
+type NewMessage = Omit<Message, 'createdAt' | 'actorType' | 'actorId' | 'projectId'> & Partial<Pick<Message, 'actorType' | 'actorId' | 'projectId'>>;
+type NewTask = Omit<Task, 'createdAt' | 'updatedAt' | 'version' | 'type' | 'creator' | 'owner' | 'reviewer' | 'isBlocked' | 'projectId'> &
+  Partial<Pick<Task, 'type' | 'creator' | 'owner' | 'reviewer' | 'isBlocked' | 'projectId'>>;
 type TaskPatch = Partial<Pick<Task, 'status' | 'assigneeId' | 'owner' | 'reviewer' | 'acceptanceCriteria' | 'definitionOfDone' | 'constraints' | 'dependsOn' | 'isBlocked' | 'blockedReason' | 'context'>>;
 
 export type AuditLog = {
   id: string;
+  projectId: string;
   actorType: ActorType;
   actorId: string;
   action: string;
@@ -51,7 +53,7 @@ async function ensureDbDirectory(path: string): Promise<void> {
 function createDatabase(): Database {
   const path = getDbPath();
   client = createClient({ url: getDbUrl(path) });
-  db = drizzle(client, { schema: { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, decisions, directMessages, documents, goalAlignments, goals, knowledgeEntries, machines, messages, reminders, tasks } });
+  db = drizzle(client, { schema: { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, decisions, directMessages, documents, goalAlignments, goals, knowledgeEntries, machines, messages, projects, reminders, tasks } });
   return db;
 }
 
@@ -69,8 +71,20 @@ export async function initDb(): Promise<void> {
     const database = getDb();
 
     await database.run(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        slug TEXT UNIQUE NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        paseo_project_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    await database.run(`
       CREATE TABLE IF NOT EXISTS channels (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
         name TEXT NOT NULL,
         created_at TEXT NOT NULL
       )
@@ -78,6 +92,7 @@ export async function initDb(): Promise<void> {
     await database.run(`
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
         channel_id TEXT NOT NULL,
         sender_name TEXT NOT NULL,
         content TEXT NOT NULL,
@@ -93,6 +108,7 @@ export async function initDb(): Promise<void> {
     await database.run(`ALTER TABLE messages ADD COLUMN actor_id TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE messages ADD COLUMN thread_root_id TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE messages ADD COLUMN mentions TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE messages ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'`).catch(() => undefined);
     await database.run(`
       CREATE TABLE IF NOT EXISTS activities (
         id TEXT PRIMARY KEY,
@@ -132,6 +148,7 @@ export async function initDb(): Promise<void> {
     await database.run(`
       CREATE TABLE IF NOT EXISTS audit_log (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
         actor_type TEXT NOT NULL,
         actor_id TEXT,
         action TEXT NOT NULL,
@@ -146,6 +163,7 @@ export async function initDb(): Promise<void> {
     await database.run(`
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
         channel_id TEXT NOT NULL,
         message_id TEXT,
         title TEXT NOT NULL,
@@ -176,6 +194,7 @@ export async function initDb(): Promise<void> {
     await database.run(`
       CREATE TABLE IF NOT EXISTS goals (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
         channel_id TEXT NOT NULL,
         source_message_id TEXT,
         requester_name TEXT NOT NULL,
@@ -193,6 +212,7 @@ export async function initDb(): Promise<void> {
     await database.run(`
       CREATE TABLE IF NOT EXISTS goal_alignments (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
         channel_id TEXT NOT NULL,
         thread_root_id TEXT NOT NULL,
         source_message_id TEXT NOT NULL,
@@ -217,6 +237,7 @@ export async function initDb(): Promise<void> {
     await database.run(`
       CREATE TABLE IF NOT EXISTS reminders (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
         agent_id TEXT NOT NULL,
         channel_id TEXT NOT NULL,
         message TEXT NOT NULL,
@@ -228,6 +249,7 @@ export async function initDb(): Promise<void> {
     await database.run(`
       CREATE TABLE IF NOT EXISTS knowledge_entries (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
         kind TEXT NOT NULL,
         title TEXT NOT NULL,
         summary TEXT NOT NULL,
@@ -244,6 +266,7 @@ export async function initDb(): Promise<void> {
     await database.run(`
       CREATE TABLE IF NOT EXISTS decisions (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
         channel_id TEXT NOT NULL,
         source_thread_id TEXT,
         title TEXT NOT NULL,
@@ -266,6 +289,7 @@ export async function initDb(): Promise<void> {
     await database.run(`
       CREATE TABLE IF NOT EXISTS documents (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
         kind TEXT NOT NULL,
         title TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'draft',
@@ -304,6 +328,7 @@ export async function initDb(): Promise<void> {
     await database.run(`ALTER TABLE tasks ADD COLUMN blocked_reason TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE tasks ADD COLUMN source_channel_id TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE tasks ADD COLUMN source_thread_id TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'`).catch(() => undefined);
     await database.run(`UPDATE tasks SET status = 'backlog' WHERE status = 'todo'`).catch(() => undefined);
     await database.run(`UPDATE tasks SET is_blocked = 1, status = 'in_progress' WHERE status = 'blocked'`).catch(() => undefined);
     await database.run(`UPDATE messages SET actor_type = 'agent', actor_id = agent_id WHERE agent_id IS NOT NULL AND actor_id IS NULL`).catch(() => undefined);
@@ -311,6 +336,7 @@ export async function initDb(): Promise<void> {
     await database.run(`
       CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
         name TEXT NOT NULL,
         display_name TEXT,
         description TEXT,
@@ -351,7 +377,16 @@ export async function initDb(): Promise<void> {
     await database.run(`ALTER TABLE agents ADD COLUMN examples TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE agents ADD COLUMN organization TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE agents ADD COLUMN runtime_instance_id TEXT`).catch(() => undefined);
+    await database.run(`ALTER TABLE agents ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'`).catch(() => undefined);
     await database.run(`UPDATE agents SET role = 'unassigned' WHERE role IS NULL`).catch(() => undefined);
+    await database.run(`ALTER TABLE channels ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'`).catch(() => undefined);
+    await database.run(`ALTER TABLE goals ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'`).catch(() => undefined);
+    await database.run(`ALTER TABLE goal_alignments ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'`).catch(() => undefined);
+    await database.run(`ALTER TABLE reminders ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'`).catch(() => undefined);
+    await database.run(`ALTER TABLE knowledge_entries ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'`).catch(() => undefined);
+    await database.run(`ALTER TABLE decisions ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'`).catch(() => undefined);
+    await database.run(`ALTER TABLE documents ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'`).catch(() => undefined);
+    await database.run(`ALTER TABLE audit_log ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'`).catch(() => undefined);
     await database.run(`
       CREATE TABLE IF NOT EXISTS agent_permissions (
         agent_id TEXT PRIMARY KEY,
@@ -371,6 +406,17 @@ export async function initDb(): Promise<void> {
       )
     `);
     await database.run(`CREATE INDEX IF NOT EXISTS idx_agents_runtime_instance_id ON agents(runtime_instance_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_channels_project ON channels(project_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_goals_project ON goals(project_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_goal_alignments_project ON goal_alignments(project_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_reminders_project ON reminders(project_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge_entries(project_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_audit_project ON audit_log(project_id)`);
     await database.run(`
       CREATE TABLE IF NOT EXISTS machines (
         id TEXT PRIMARY KEY,
@@ -384,9 +430,23 @@ export async function initDb(): Promise<void> {
       )
     `);
 
+    const now = new Date().toISOString();
+    await database
+      .insert(projects)
+      .values({
+        id: DEFAULT_PROJECT_ID,
+        name: 'Default Project',
+        slug: DEFAULT_PROJECT_ID,
+        description: 'Auto-created during v2.2.1 migration',
+        paseoProjectId: null,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoNothing();
+
     await database
       .insert(channels)
-      .values({ id: 'general', name: 'general', createdAt: new Date().toISOString() })
+      .values({ id: 'general', projectId: DEFAULT_PROJECT_ID, name: 'general', createdAt: new Date().toISOString() })
       .onConflictDoNothing();
     await resetVolatileState();
 
@@ -451,6 +511,7 @@ function normalizeRole(value: string | null | undefined): AgentRole {
 function toAgent(row: typeof agents.$inferSelect): Agent {
   return {
     id: row.id,
+    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
     name: row.name,
     displayName: row.displayName ?? undefined,
     description: row.description ?? undefined,
@@ -477,6 +538,7 @@ function toAgent(row: typeof agents.$inferSelect): Agent {
 function toMessage(row: typeof messages.$inferSelect): Message {
   return {
     id: row.id,
+    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
     channelId: row.channelId,
     senderName: row.senderName,
     content: row.content,
@@ -486,6 +548,27 @@ function toMessage(row: typeof messages.$inferSelect): Message {
     threadRootId: row.threadRootId ?? undefined,
     mentions: row.mentions ? JSON.parse(row.mentions) as Message['mentions'] : undefined,
     createdAt: row.createdAt,
+  };
+}
+
+function toChannel(row: typeof channels.$inferSelect): Channel {
+  return {
+    id: row.id,
+    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
+    name: row.name,
+    createdAt: row.createdAt,
+  };
+}
+
+function toProject(row: typeof projects.$inferSelect): Project {
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    description: row.description,
+    paseoProjectId: row.paseoProjectId ?? undefined,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
@@ -534,6 +617,7 @@ function toAgentDelegation(row: typeof agentDelegations.$inferSelect): AgentDele
 function toAuditLog(row: typeof auditLogs.$inferSelect): AuditLog {
   return {
     id: row.id,
+    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
     actorType: row.actorType as AuditLog['actorType'],
     actorId: row.actorId ?? 'unknown',
     action: row.action,
@@ -552,6 +636,7 @@ function toTask(row: typeof tasks.$inferSelect): Task {
   const reviewerId = row.reviewerId ?? context?.reviewerAgentId ?? undefined;
   return {
     id: row.id,
+    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
     channelId: row.channelId,
     messageId: row.messageId ?? undefined,
     title: row.title,
@@ -595,6 +680,7 @@ function normalizeTaskStatus(status: string): TaskStatus {
 function toGoal(row: typeof goals.$inferSelect): GoalBrief {
   return {
     id: row.id,
+    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
     channelId: row.channelId,
     sourceMessageId: row.sourceMessageId ?? undefined,
     requesterName: row.requesterName,
@@ -613,6 +699,7 @@ function toGoal(row: typeof goals.$inferSelect): GoalBrief {
 function toGoalAlignment(row: typeof goalAlignments.$inferSelect): GoalAlignment {
   return {
     id: row.id,
+    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
     channelId: row.channelId,
     threadRootId: row.threadRootId,
     sourceMessageId: row.sourceMessageId,
@@ -638,6 +725,7 @@ function toGoalAlignment(row: typeof goalAlignments.$inferSelect): GoalAlignment
 function toReminder(row: typeof reminders.$inferSelect): Reminder {
   return {
     id: row.id,
+    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
     agentId: row.agentId,
     channelId: row.channelId,
     message: row.message,
@@ -650,6 +738,7 @@ function toReminder(row: typeof reminders.$inferSelect): Reminder {
 function toKnowledgeEntry(row: typeof knowledgeEntries.$inferSelect): KnowledgeEntry {
   return {
     id: row.id,
+    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
     kind: row.kind as KnowledgeKind,
     title: row.title,
     summary: row.summary,
@@ -672,6 +761,7 @@ function normalizeDecisionStatus(status: string): DecisionStatus {
 function toDecision(row: typeof decisions.$inferSelect): Decision {
   return {
     id: row.id,
+    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
     channelId: row.channelId,
     sourceThreadId: row.sourceThreadId ?? undefined,
     title: row.title,
@@ -698,6 +788,7 @@ function normalizeDocumentStatus(status: string): DocumentStatus {
 function toDocument(row: typeof documents.$inferSelect): Document {
   return {
     id: row.id,
+    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
     kind: row.kind as DocumentKind,
     title: row.title,
     status: normalizeDocumentStatus(row.status),
@@ -804,20 +895,26 @@ export class SqliteStore {
     return permissions;
   }
 
-  async listChannels(): Promise<Channel[]> {
+  async listChannels(filter: { projectId?: string } = {}): Promise<Channel[]> {
     await initDb();
-    return getDb().select().from(channels).orderBy(asc(channels.createdAt));
+    const rows = await getDb().select().from(channels).orderBy(asc(channels.createdAt));
+    return rows
+      .map(toChannel)
+      .filter((channel) => !filter.projectId || channel.projectId === filter.projectId);
   }
 
-  async getChannel(id: string): Promise<Channel | undefined> {
+  async getChannel(id: string, filter: { projectId?: string } = {}): Promise<Channel | undefined> {
     await initDb();
     const [channel] = await getDb().select().from(channels).where(eq(channels.id, id)).limit(1);
-    return channel;
+    const parsed = channel ? toChannel(channel) : undefined;
+    if (!parsed) return undefined;
+    if (filter.projectId && parsed.projectId !== filter.projectId) return undefined;
+    return parsed;
   }
 
-  async createChannel(id: string, name: string): Promise<Channel> {
+  async createChannel(id: string, name: string, projectId = DEFAULT_PROJECT_ID): Promise<Channel> {
     await initDb();
-    const channel: Channel = { id, name, createdAt: new Date().toISOString() };
+    const channel: Channel = { id, projectId, name, createdAt: new Date().toISOString() };
     await getDb().insert(channels).values(channel);
     return channel;
   }
@@ -834,6 +931,68 @@ export class SqliteStore {
     await getDb().delete(decisions).where(eq(decisions.channelId, id));
     await getDb().delete(documents).where(eq(documents.sourceChannelId, id));
     await getDb().delete(channels).where(eq(channels.id, id));
+    return true;
+  }
+
+  async listProjects(): Promise<Project[]> {
+    await initDb();
+    const rows = await getDb().select().from(projects).orderBy(asc(projects.createdAt));
+    return rows.map(toProject);
+  }
+
+  async getProject(id: string): Promise<Project | undefined> {
+    await initDb();
+    const [row] = await getDb().select().from(projects).where(eq(projects.id, id)).limit(1);
+    return row ? toProject(row) : undefined;
+  }
+
+  async getProjectBySlug(slug: string): Promise<Project | undefined> {
+    await initDb();
+    const [row] = await getDb().select().from(projects).where(eq(projects.slug, slug)).limit(1);
+    return row ? toProject(row) : undefined;
+  }
+
+  async createProject(input: Omit<Project, 'createdAt' | 'updatedAt'>): Promise<Project> {
+    await initDb();
+    const now = new Date().toISOString();
+    const created: Project = { ...input, createdAt: now, updatedAt: now };
+    await getDb().insert(projects).values({
+      id: created.id,
+      name: created.name,
+      slug: created.slug,
+      description: created.description,
+      paseoProjectId: created.paseoProjectId ?? null,
+      createdAt: created.createdAt,
+      updatedAt: created.updatedAt,
+    });
+    return created;
+  }
+
+  async updateProject(id: string, patch: Partial<Omit<Project, 'id' | 'createdAt' | 'updatedAt'>>): Promise<Project | undefined> {
+    await initDb();
+    const existing = await this.getProject(id);
+    if (!existing) return undefined;
+    const updated: Project = {
+      ...existing,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    await getDb().update(projects).set({
+      name: updated.name,
+      slug: updated.slug,
+      description: updated.description,
+      paseoProjectId: updated.paseoProjectId ?? null,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    }).where(eq(projects.id, id));
+    return updated;
+  }
+
+  async deleteProject(id: string): Promise<boolean> {
+    await initDb();
+    const existing = await this.getProject(id);
+    if (!existing) return false;
+    await getDb().delete(projects).where(eq(projects.id, id));
     return true;
   }
 
@@ -855,13 +1014,14 @@ export class SqliteStore {
     return rows.map(toMessage).reverse();
   }
 
-  async searchMessages(query: string, limit: number): Promise<SearchMessageResult[]> {
+  async searchMessages(query: string, limit: number, projectId?: string): Promise<SearchMessageResult[]> {
     await initDb();
     const needle = query.toLowerCase();
     const channelMap = new Map((await this.listChannels()).map((channel) => [channel.id, channel.name]));
     const rows = await getDb().select().from(messages).orderBy(desc(messages.createdAt)).limit(1000);
     return rows
       .map(toMessage)
+      .filter((message) => !projectId || message.projectId === projectId)
       .filter((message) => message.content.toLowerCase().includes(needle))
       .slice(0, limit)
       .map((message) => ({ ...message, channelName: channelMap.get(message.channelId) ?? message.channelId }));
@@ -871,6 +1031,7 @@ export class SqliteStore {
     await initDb();
     const message: Message = {
       ...msg,
+      projectId: msg.projectId ?? DEFAULT_PROJECT_ID,
       actorType: msg.actorType ?? (msg.agentId ? 'agent' : 'human'),
       actorId: msg.actorId ?? msg.agentId ?? msg.senderName,
       createdAt: new Date().toISOString(),
@@ -961,8 +1122,12 @@ export class SqliteStore {
       .where(eq(messages.threadRootId, actualRoot.id))
       .orderBy(asc(messages.createdAt));
     const replies = replyRows.map(toMessage);
-    const linkedDecisions = (await getDb().select().from(decisions).where(eq(decisions.sourceThreadId, actualRoot.id))).map(toDecision);
-    const linkedDocuments = (await getDb().select().from(documents).where(eq(documents.sourceThreadId, actualRoot.id))).map(toDocument);
+    const linkedDecisions = (await getDb().select().from(decisions).where(eq(decisions.sourceThreadId, actualRoot.id)))
+      .map(toDecision)
+      .filter((decision) => decision.projectId === actualRoot.projectId);
+    const linkedDocuments = (await getDb().select().from(documents).where(eq(documents.sourceThreadId, actualRoot.id)))
+      .map(toDocument)
+      .filter((document) => document.projectId === actualRoot.projectId);
     return {
       root: withThreadSummary(actualRoot, [actualRoot, ...replies]),
       replies,
@@ -1013,16 +1178,18 @@ export class SqliteStore {
     return rows.map(toAgentDelegation);
   }
 
-  async appendAuditLog(entry: Omit<AuditLog, 'id' | 'createdAt' | 'actorId'> & { id?: string; actorId?: string }): Promise<AuditLog> {
+  async appendAuditLog(entry: Omit<AuditLog, 'id' | 'createdAt' | 'actorId' | 'projectId'> & { id?: string; actorId?: string; projectId?: string }): Promise<AuditLog> {
     await initDb();
     const created: AuditLog = {
       ...entry,
+      projectId: entry.projectId ?? DEFAULT_PROJECT_ID,
       actorId: entry.actorId ?? entry.actorType,
       id: entry.id ?? nanoid(),
       createdAt: new Date().toISOString(),
     };
     await getDb().insert(auditLogs).values({
       id: created.id,
+      projectId: created.projectId,
       actorType: created.actorType,
       actorId: created.actorId,
       action: created.action,
@@ -1036,24 +1203,26 @@ export class SqliteStore {
     return created;
   }
 
-  async listAuditLogs(filter: { taskId?: string; entityType?: string; entityId?: string } = {}): Promise<AuditLog[]> {
+  async listAuditLogs(filter: { projectId?: string; taskId?: string; entityType?: string; entityId?: string } = {}): Promise<AuditLog[]> {
     await initDb();
     const rows = await getDb().select().from(auditLogs).orderBy(asc(auditLogs.createdAt));
     return rows
       .map(toAuditLog)
       .filter((entry) =>
+        (!filter.projectId || entry.projectId === filter.projectId) &&
         (!filter.taskId || entry.taskId === filter.taskId) &&
         (!filter.entityType || entry.entityType === filter.entityType) &&
         (!filter.entityId || entry.entityId === filter.entityId)
       );
   }
 
-  async listTasks(filter: { channelId?: string; status?: TaskStatus; assigneeId?: string } = {}): Promise<Task[]> {
+  async listTasks(filter: { projectId?: string; channelId?: string; status?: TaskStatus; assigneeId?: string } = {}): Promise<Task[]> {
     await initDb();
     const rows = await getDb().select().from(tasks).orderBy(asc(tasks.createdAt));
     return rows
       .map(toTask)
       .filter((task) =>
+        (!filter.projectId || task.projectId === filter.projectId) &&
         (!filter.channelId || task.channelId === filter.channelId) &&
         (!filter.status || task.status === filter.status) &&
         (!filter.assigneeId || task.assigneeId === filter.assigneeId)
@@ -1072,6 +1241,7 @@ export class SqliteStore {
     const owner = task.owner ?? (task.assigneeId ? { actorType: 'agent' as const, actorId: task.assigneeId } : undefined);
     const created: Task = {
       ...task,
+      projectId: task.projectId ?? DEFAULT_PROJECT_ID,
       title: task.title.slice(0, 200),
       status: normalizeTaskStatus(task.status),
       type: task.type ?? 'feature',
@@ -1085,6 +1255,7 @@ export class SqliteStore {
     };
     await getDb().insert(tasks).values({
       ...created,
+      projectId: created.projectId,
       messageId: created.messageId ?? null,
       assigneeId: created.assigneeId ?? null,
       creatorType: created.creator.actorType,
@@ -1150,12 +1321,13 @@ export class SqliteStore {
     return true;
   }
 
-  async listGoals(filter: { channelId?: string; status?: GoalBriefStatus } = {}): Promise<GoalBrief[]> {
+  async listGoals(filter: { projectId?: string; channelId?: string; status?: GoalBriefStatus } = {}): Promise<GoalBrief[]> {
     await initDb();
     const rows = await getDb().select().from(goals).orderBy(asc(goals.createdAt));
     return rows
       .map(toGoal)
       .filter((goal) =>
+        (!filter.projectId || goal.projectId === filter.projectId) &&
         (!filter.channelId || goal.channelId === filter.channelId) &&
         (!filter.status || goal.status === filter.status)
       );
@@ -1167,12 +1339,13 @@ export class SqliteStore {
     return goal ? toGoal(goal) : undefined;
   }
 
-  async createGoal(goal: Omit<GoalBrief, 'createdAt' | 'updatedAt'>): Promise<GoalBrief> {
+  async createGoal(goal: Omit<GoalBrief, 'createdAt' | 'updatedAt' | 'projectId'> & Partial<Pick<GoalBrief, 'projectId'>>): Promise<GoalBrief> {
     await initDb();
     const now = new Date().toISOString();
-    const created: GoalBrief = { ...goal, createdAt: now, updatedAt: now };
+    const created: GoalBrief = { ...goal, projectId: goal.projectId ?? DEFAULT_PROJECT_ID, createdAt: now, updatedAt: now };
     await getDb().insert(goals).values({
       ...created,
+      projectId: created.projectId,
       sourceMessageId: created.sourceMessageId ?? null,
       background: JSON.stringify(created.background),
       successCriteria: JSON.stringify(created.successCriteria),
@@ -1204,12 +1377,13 @@ export class SqliteStore {
     return updated;
   }
 
-  async listGoalAlignments(filter: { channelId?: string; status?: GoalAlignmentStatus } = {}): Promise<GoalAlignment[]> {
+  async listGoalAlignments(filter: { projectId?: string; channelId?: string; status?: GoalAlignmentStatus } = {}): Promise<GoalAlignment[]> {
     await initDb();
     const rows = await getDb().select().from(goalAlignments).orderBy(asc(goalAlignments.createdAt));
     return rows
       .map(toGoalAlignment)
       .filter((alignment) =>
+        (!filter.projectId || alignment.projectId === filter.projectId) &&
         (!filter.channelId || alignment.channelId === filter.channelId) &&
         (!filter.status || alignment.status === filter.status)
       );
@@ -1221,12 +1395,13 @@ export class SqliteStore {
     return alignment ? toGoalAlignment(alignment) : undefined;
   }
 
-  async createGoalAlignment(alignment: Omit<GoalAlignment, 'createdAt' | 'updatedAt'>): Promise<GoalAlignment> {
+  async createGoalAlignment(alignment: Omit<GoalAlignment, 'createdAt' | 'updatedAt' | 'projectId'> & Partial<Pick<GoalAlignment, 'projectId'>>): Promise<GoalAlignment> {
     await initDb();
     const now = new Date().toISOString();
-    const created: GoalAlignment = { ...alignment, createdAt: now, updatedAt: now };
+    const created: GoalAlignment = { ...alignment, projectId: alignment.projectId ?? DEFAULT_PROJECT_ID, createdAt: now, updatedAt: now };
     await getDb().insert(goalAlignments).values({
       ...created,
+      projectId: created.projectId,
       goalId: created.goalId ?? null,
       questions: JSON.stringify(created.questions),
       answers: JSON.stringify(created.answers),
@@ -1270,10 +1445,13 @@ export class SqliteStore {
     return updated;
   }
 
-  async listReminders(agentId?: string): Promise<Reminder[]> {
+  async listReminders(filter: { projectId?: string; agentId?: string } | string = {}): Promise<Reminder[]> {
     await initDb();
+    const normalized = typeof filter === 'string' ? { agentId: filter } : filter;
     const rows = await getDb().select().from(reminders).orderBy(asc(reminders.triggerAt));
-    return rows.map(toReminder).filter((reminder) => !agentId || reminder.agentId === agentId);
+    return rows
+      .map(toReminder)
+      .filter((reminder) => (!normalized.projectId || reminder.projectId === normalized.projectId) && (!normalized.agentId || reminder.agentId === normalized.agentId));
   }
 
   async listDueReminders(nowIso: string): Promise<Reminder[]> {
@@ -1286,9 +1464,9 @@ export class SqliteStore {
     return reminder ? toReminder(reminder) : undefined;
   }
 
-  async createReminder(reminder: Omit<Reminder, 'createdAt'>): Promise<Reminder> {
+  async createReminder(reminder: Omit<Reminder, 'createdAt' | 'projectId'> & Partial<Pick<Reminder, 'projectId'>>): Promise<Reminder> {
     await initDb();
-    const created: Reminder = { ...reminder, createdAt: new Date().toISOString() };
+    const created: Reminder = { ...reminder, projectId: reminder.projectId ?? DEFAULT_PROJECT_ID, createdAt: new Date().toISOString() };
     await getDb().insert(reminders).values(created);
     return created;
   }
@@ -1302,7 +1480,7 @@ export class SqliteStore {
     return updated;
   }
 
-  async searchKnowledge(filter: { query?: string; kind?: KnowledgeKind; tags?: string[]; limit?: number } = {}): Promise<KnowledgeSearchResult[]> {
+  async searchKnowledge(filter: { projectId?: string; query?: string; kind?: KnowledgeKind; tags?: string[]; limit?: number } = {}): Promise<KnowledgeSearchResult[]> {
     await initDb();
     const rows = await getDb().select().from(knowledgeEntries).orderBy(desc(knowledgeEntries.updatedAt));
     const query = (filter.query ?? '').trim().toLowerCase();
@@ -1310,7 +1488,11 @@ export class SqliteStore {
     return rows
       .map(toKnowledgeEntry)
       .map((entry) => ({ entry, score: scoreKnowledge(entry, query), reason: query ? `Matched "${query}"` : 'Recent knowledge' }))
-      .filter((result) => (!filter.kind || result.entry.kind === filter.kind) && tags.every((tag) => result.entry.tags.includes(tag)))
+      .filter((result) =>
+        (!filter.projectId || result.entry.projectId === filter.projectId) &&
+        (!filter.kind || result.entry.kind === filter.kind) &&
+        tags.every((tag) => result.entry.tags.includes(tag))
+      )
       .filter((result) => !query || result.score > 0)
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || new Date(b.entry.updatedAt).getTime() - new Date(a.entry.updatedAt).getTime())
       .slice(0, filter.limit ?? 20);
@@ -1322,12 +1504,13 @@ export class SqliteStore {
     return entry ? toKnowledgeEntry(entry) : undefined;
   }
 
-  async createKnowledgeEntry(entry: Omit<KnowledgeEntry, 'createdAt' | 'updatedAt'>): Promise<KnowledgeEntry> {
+  async createKnowledgeEntry(entry: Omit<KnowledgeEntry, 'createdAt' | 'updatedAt' | 'projectId'> & Partial<Pick<KnowledgeEntry, 'projectId'>>): Promise<KnowledgeEntry> {
     await initDb();
     const now = new Date().toISOString();
-    const created: KnowledgeEntry = { ...entry, createdAt: now, updatedAt: now };
+    const created: KnowledgeEntry = { ...entry, projectId: entry.projectId ?? DEFAULT_PROJECT_ID, createdAt: now, updatedAt: now };
     await getDb().insert(knowledgeEntries).values({
       ...created,
+      projectId: created.projectId,
       tags: JSON.stringify(created.tags),
       sourceRefs: JSON.stringify(created.sourceRefs),
       ownerAgentId: created.ownerAgentId ?? null,
@@ -1356,12 +1539,16 @@ export class SqliteStore {
     return updated;
   }
 
-  async listDecisions(filter: { channelId?: string; status?: DecisionStatus } = {}): Promise<Decision[]> {
+  async listDecisions(filter: { projectId?: string; channelId?: string; status?: DecisionStatus } = {}): Promise<Decision[]> {
     await initDb();
     const rows = await getDb().select().from(decisions).orderBy(desc(decisions.updatedAt));
     return rows
       .map(toDecision)
-      .filter((decision) => (!filter.channelId || decision.channelId === filter.channelId) && (!filter.status || decision.status === filter.status));
+      .filter((decision) =>
+        (!filter.projectId || decision.projectId === filter.projectId) &&
+        (!filter.channelId || decision.channelId === filter.channelId) &&
+        (!filter.status || decision.status === filter.status)
+      );
   }
 
   async getDecision(id: string): Promise<Decision | undefined> {
@@ -1370,12 +1557,13 @@ export class SqliteStore {
     return row ? toDecision(row) : undefined;
   }
 
-  async createDecision(input: Omit<Decision, 'createdAt' | 'updatedAt'>): Promise<Decision> {
+  async createDecision(input: Omit<Decision, 'createdAt' | 'updatedAt' | 'projectId'> & Partial<Pick<Decision, 'projectId'>>): Promise<Decision> {
     await initDb();
     const now = new Date().toISOString();
-    const created: Decision = { ...input, createdAt: now, updatedAt: now };
+    const created: Decision = { ...input, projectId: input.projectId ?? DEFAULT_PROJECT_ID, createdAt: now, updatedAt: now };
     await getDb().insert(decisions).values({
       ...created,
+      projectId: created.projectId,
       sourceThreadId: created.sourceThreadId ?? null,
       alternatives: created.alternatives ? JSON.stringify(created.alternatives) : null,
       rationale: created.rationale ?? null,
@@ -1413,12 +1601,13 @@ export class SqliteStore {
     return updated;
   }
 
-  async listDocuments(filter: { sourceChannelId?: string; kind?: DocumentKind; status?: DocumentStatus } = {}): Promise<Document[]> {
+  async listDocuments(filter: { projectId?: string; sourceChannelId?: string; kind?: DocumentKind; status?: DocumentStatus } = {}): Promise<Document[]> {
     await initDb();
     const rows = await getDb().select().from(documents).orderBy(desc(documents.updatedAt));
     return rows
       .map(toDocument)
       .filter((document) =>
+        (!filter.projectId || document.projectId === filter.projectId) &&
         (!filter.sourceChannelId || document.sourceChannelId === filter.sourceChannelId) &&
         (!filter.kind || document.kind === filter.kind) &&
         (!filter.status || document.status === filter.status)
@@ -1431,12 +1620,13 @@ export class SqliteStore {
     return row ? toDocument(row) : undefined;
   }
 
-  async createDocument(input: Omit<Document, 'createdAt' | 'updatedAt'>): Promise<Document> {
+  async createDocument(input: Omit<Document, 'createdAt' | 'updatedAt' | 'projectId'> & Partial<Pick<Document, 'projectId'>>): Promise<Document> {
     await initDb();
     const now = new Date().toISOString();
-    const created: Document = { ...input, createdAt: now, updatedAt: now };
+    const created: Document = { ...input, projectId: input.projectId ?? DEFAULT_PROJECT_ID, createdAt: now, updatedAt: now };
     await getDb().insert(documents).values({
       ...created,
+      projectId: created.projectId,
       sourceThreadId: created.sourceThreadId ?? null,
       authorType: created.author.actorType,
       authorId: created.author.actorId,
@@ -1565,10 +1755,13 @@ export class SqliteStore {
     await getDb().update(machines).set({ status: 'offline' }).where(eq(machines.id, id));
   }
 
-  async listAgents(filter: { role?: AgentRole; capability?: AgentCapability } = {}): Promise<Agent[]> {
+  async listAgents(filter: { projectId?: string; role?: AgentRole; capability?: AgentCapability } = {}): Promise<Agent[]> {
     await initDb();
     const rows = await getDb().select().from(agents).orderBy(asc(agents.createdAt));
     let agentList = await this.withAgentPermissions(rows.map(toAgent));
+    if (filter.projectId) {
+      agentList = agentList.filter((agent) => agent.projectId === filter.projectId);
+    }
     if (filter.role) {
       agentList = agentList.filter((agent) => (agent.role ?? 'unassigned') === filter.role);
     }
@@ -1620,11 +1813,13 @@ export class SqliteStore {
     return resolveAgents(await this.listAgents(), input);
   }
 
-  async createAgent(agent: Agent): Promise<Agent> {
+  async createAgent(agent: Omit<Agent, 'projectId'> & Partial<Pick<Agent, 'projectId'>>): Promise<Agent> {
     await initDb();
+    const projectId = agent.projectId ?? DEFAULT_PROJECT_ID;
     const role = agent.role ?? 'unassigned';
     await getDb().insert(agents).values({
       ...agent,
+      projectId,
       displayName: agent.displayName ?? null,
       description: agent.description ?? null,
       model: agent.model ?? null,
@@ -1646,6 +1841,7 @@ export class SqliteStore {
     await this.setAgentPermissions(agent.id, permissions);
     return {
       ...agent,
+      projectId,
       role,
       permissions,
     };
@@ -1762,5 +1958,16 @@ export async function resetStore(): Promise<void> {
   await database.delete(agents);
   await database.delete(machines);
   await database.delete(channels);
-  await database.insert(channels).values({ id: 'general', name: 'general', createdAt: new Date().toISOString() });
+  await database.delete(projects);
+  const now = new Date().toISOString();
+  await database.insert(projects).values({
+    id: DEFAULT_PROJECT_ID,
+    name: 'Default Project',
+    slug: DEFAULT_PROJECT_ID,
+    description: 'Auto-created during v2.2.1 migration',
+    paseoProjectId: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await database.insert(channels).values({ id: 'general', projectId: DEFAULT_PROJECT_ID, name: 'general', createdAt: new Date().toISOString() });
 }

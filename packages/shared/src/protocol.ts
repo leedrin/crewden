@@ -33,6 +33,16 @@ export type AgentPermissions = {
   requiresApprovalFor: string[];
 };
 
+export type Project = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  paseoProjectId?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type AgentActivity = {
   id: string;
   agentId: string;
@@ -144,6 +154,7 @@ export type TaskReview = {
 
 export type KnowledgeEntry = {
   id: string;
+  projectId?: string;
   kind: KnowledgeKind;
   title: string;
   summary: string;
@@ -174,6 +185,7 @@ export type KnowledgeAdapter = {
 
 export type GoalBrief = {
   id: string;
+  projectId?: string;
   channelId: string;
   sourceMessageId?: string;
   requesterName: string;
@@ -202,6 +214,7 @@ export type GoalAlignmentTaskDraft = GoalTaskDraft & {
 
 export type GoalAlignment = {
   id: string;
+  projectId?: string;
   channelId: string;
   threadRootId: string;
   sourceMessageId: string;
@@ -257,6 +270,7 @@ export type TaskContext = {
 
 export type Task = {
   id: string;
+  projectId?: string;
   channelId: string;
   messageId?: string;
   title: string;
@@ -283,6 +297,7 @@ export type Task = {
 
 export type AuditLogEntry = {
   id: string;
+  projectId?: string;
   actorType: ActorType;
   actorId: string;
   action: string;
@@ -300,6 +315,7 @@ export type DecisionParticipant = {
 
 export type Decision = {
   id: string;
+  projectId?: string;
   channelId: string;
   sourceThreadId?: string;
   title: string;
@@ -324,6 +340,7 @@ export type DocumentReviewer = {
 
 export type Document = {
   id: string;
+  projectId?: string;
   kind: DocumentKind;
   title: string;
   status: DocumentStatus;
@@ -345,6 +362,7 @@ export type ReminderStatus = 'pending' | 'triggered' | 'cancelled';
 
 export type Reminder = {
   id: string;
+  projectId?: string;
   agentId: string;
   channelId: string;
   message: string;
@@ -447,6 +465,7 @@ export type ServerToDaemon =
 
 export type Message = {
   id: string;
+  projectId?: string;
   channelId: string;
   agentId?: string;
   actorType: ActorType;
@@ -479,6 +498,7 @@ export type SearchMessageResult = Message & {
 
 export type Channel = {
   id: string;
+  projectId?: string;
   name: string;
   createdAt: string;
 };
@@ -496,6 +516,7 @@ export type Machine = {
 
 export type Agent = {
   id: string;
+  projectId?: string;
   name: string;
   displayName?: string;
   description?: string;

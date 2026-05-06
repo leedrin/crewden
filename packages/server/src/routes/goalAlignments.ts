@@ -13,10 +13,11 @@ import { eventBus } from '../events.js';
 import { notifyTaskAssignee } from '../taskDelivery.js';
 
 export async function goalAlignmentRoutes(app: FastifyInstance) {
-  app.get<{ Querystring: { channelId?: string; status?: string } }>('/api/goal-alignments', async (req, reply) => {
+  app.get<{ Querystring: { projectId?: string; channelId?: string; status?: string } }>('/api/goal-alignments', async (req, reply) => {
     const status = req.query.status === undefined ? undefined : GoalAlignmentStatusSchema.safeParse(req.query.status);
     if (status && !status.success) return reply.status(400).send({ error: 'Invalid status' });
     return getStore().listGoalAlignments({
+      projectId: req.query.projectId,
       channelId: req.query.channelId,
       status: status?.success ? status.data : undefined,
     });
@@ -29,7 +30,7 @@ export async function goalAlignmentRoutes(app: FastifyInstance) {
     const message = await store.getMessage(req.params.id);
     if (!message) return reply.status(404).send({ error: 'Message not found' });
 
-    const agents = await store.listAgents();
+    const agents = await store.listAgents({ projectId: message.projectId });
     const objective = parsed.data.objective ?? message.content.slice(0, 240);
     const recommendation = recommendAgentsForGoal(objective, agents);
     const questions = buildClarifyingQuestions(message);
@@ -37,6 +38,7 @@ export async function goalAlignmentRoutes(app: FastifyInstance) {
     const taskDrafts = buildTaskDrafts(objective, recommendation);
     const alignment = await store.createGoalAlignment({
       id: nanoid(),
+      projectId: message.projectId,
       channelId: message.channelId,
       threadRootId: message.threadRootId ?? message.id,
       sourceMessageId: message.id,
@@ -98,6 +100,7 @@ export async function goalAlignmentRoutes(app: FastifyInstance) {
         })
       : await store.createGoal({
           id: nanoid(),
+          projectId: alignment.projectId,
           channelId: alignment.channelId,
           sourceMessageId: alignment.sourceMessageId,
           requesterName: parsed.data.requesterName,
@@ -116,6 +119,7 @@ export async function goalAlignmentRoutes(app: FastifyInstance) {
     for (const draft of alignment.taskDrafts) {
       const task = await store.createTask({
         id: nanoid(),
+        projectId: alignment.projectId,
         channelId: alignment.channelId,
         messageId: alignment.sourceMessageId,
         title: draft.title,
@@ -153,6 +157,7 @@ export async function goalAlignmentRoutes(app: FastifyInstance) {
     if (updated) eventBus.emit({ type: 'goal-alignment:update', alignment: updated });
     await store.createMessage({
       id: nanoid(),
+      projectId: alignment.projectId,
       channelId: alignment.channelId,
       senderName: 'system',
       content: `Goal plan confirmed: ${goal.objective}\nTasks created: ${tasks.map((task) => `#${task.id.slice(0, 6)} ${task.title}`).join('; ')}`,
@@ -191,6 +196,7 @@ function buildPlanSummary(objective: string, recommendation: ReturnType<typeof r
 async function postAlignmentThreadMessage(alignment: GoalAlignment, requesterName: string): Promise<void> {
   await getStore().createMessage({
     id: nanoid(),
+    projectId: alignment.projectId,
     channelId: alignment.channelId,
     senderName: 'system',
     content: [

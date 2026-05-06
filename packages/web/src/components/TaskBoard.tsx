@@ -4,6 +4,7 @@ import type { Agent, Channel, Task, TaskStatus } from '../api.js';
 import { createTask, deleteTask, patchTask } from '../api.js';
 
 type Props = {
+  projectId: string;
   tasks: Task[];
   channels: Channel[];
   agents: Agent[];
@@ -48,7 +49,7 @@ const COLUMNS: Array<{ id: BoardColumnId; label: string; statuses: TaskStatus[];
   { id: 'done', label: 'Done', statuses: ['done', 'cancelled'], defaultStatus: 'done', color: '#86efac' },
 ];
 
-export function TaskBoard({ tasks, channels, agents, onTaskUpdated, onTaskDeleted }: Props) {
+export function TaskBoard({ projectId, tasks, channels, agents, onTaskUpdated, onTaskDeleted }: Props) {
   const [view, setView] = useState<'board' | 'list'>(() => (typeof window !== 'undefined' && window.innerWidth < 760 ? 'list' : 'board'));
   const [channelId, setChannelId] = useState('');
   const [title, setTitle] = useState('');
@@ -71,6 +72,7 @@ export function TaskBoard({ tasks, channels, agents, onTaskUpdated, onTaskDelete
     const trimmed = title.trim();
     if (!trimmed) return;
     const task = await createTask({
+      projectId,
       title: trimmed,
       channelId: channelId || 'general',
       assigneeId: assigneeId || undefined,

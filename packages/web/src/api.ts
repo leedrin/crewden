@@ -4,6 +4,15 @@ export const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
 export const WEB_VERSION = (import.meta.env.VITE_APP_VERSION ?? '2.0.0').trim();
 export const WEB_COMMIT_SHA = (import.meta.env.VITE_COMMIT_SHA ?? '').trim();
 
+export type Project = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  paseoProjectId?: string;
+  createdAt: string;
+  updatedAt: string;
+};
 export type Channel = { id: string; name: string; createdAt: string };
 export type Mention = { type: 'agent' | 'user'; id: string; label: string };
 export type ActorType = 'human' | 'agent' | 'system';
@@ -234,16 +243,42 @@ export function buildWsUrl(path: string): string {
   return `${url}${sep}token=${encodeURIComponent(token)}`;
 }
 
-export async function getChannels(): Promise<Channel[]> {
-  const r = await apiFetch(`${API_BASE}/api/channels`, { headers: authHeaders() });
+export async function getProjects(): Promise<Project[]> {
+  const r = await apiFetch(`${API_BASE}/api/projects`, { headers: authHeaders() });
   return r.json();
 }
 
-export async function createChannel(name: string): Promise<Channel> {
+export async function createProject(data: { name: string; slug: string; description?: string; paseoProjectId?: string }): Promise<Project> {
+  const r = await apiFetch(`${API_BASE}/api/projects`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Create project failed');
+  return r.json();
+}
+
+export async function patchProject(projectId: string, data: { name?: string; slug?: string; description?: string; paseoProjectId?: string }): Promise<Project> {
+  const r = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}`, {
+    method: 'PATCH',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Update project failed');
+  return r.json();
+}
+
+export async function getChannels(projectId?: string): Promise<Channel[]> {
+  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+  const r = await apiFetch(`${API_BASE}/api/channels${query}`, { headers: authHeaders() });
+  return r.json();
+}
+
+export async function createChannel(name: string, projectId?: string): Promise<Channel> {
   const r = await apiFetch(`${API_BASE}/api/channels`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, projectId }),
   });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Create channel failed');
   return r.json();
@@ -254,8 +289,9 @@ export async function deleteChannel(channelId: string): Promise<void> {
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Delete channel failed');
 }
 
-export async function searchMessages(q: string, limit = 20): Promise<{ messages: SearchMessageResult[] }> {
+export async function searchMessages(q: string, limit = 20, projectId?: string): Promise<{ messages: SearchMessageResult[] }> {
   const params = new URLSearchParams({ q, limit: String(limit) });
+  if (projectId) params.set('projectId', projectId);
   const r = await apiFetch(`${API_BASE}/api/search?${params.toString()}`, { headers: authHeaders() });
   return r.json();
 }
@@ -286,8 +322,11 @@ export async function sendMessage(channelId: string, senderName: string, content
   return r.json();
 }
 
-export async function getAgents(): Promise<Agent[]> {
-  const r = await apiFetch(`${API_BASE}/api/agents`, { headers: authHeaders() });
+export async function getAgents(filter: { projectId?: string } = {}): Promise<Agent[]> {
+  const params = new URLSearchParams();
+  if (filter.projectId) params.set('projectId', filter.projectId);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const r = await apiFetch(`${API_BASE}/api/agents${query}`, { headers: authHeaders() });
   return r.json();
 }
 
@@ -307,6 +346,7 @@ export async function getAgentWorkspace(agentId: string, relPath = ''): Promise<
 }
 
 export async function createAgent(data: {
+  projectId?: string;
   name: string;
   displayName?: string;
   description?: string;
@@ -416,8 +456,9 @@ export async function respondRuntimePermission(
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Permission response failed');
 }
 
-export async function getTasks(filter: { channelId?: string; status?: TaskStatus } = {}): Promise<Task[]> {
+export async function getTasks(filter: { projectId?: string; channelId?: string; status?: TaskStatus } = {}): Promise<Task[]> {
   const params = new URLSearchParams();
+  if (filter.projectId) params.set('projectId', filter.projectId);
   if (filter.channelId) params.set('channelId', filter.channelId);
   if (filter.status) params.set('status', filter.status);
   const query = params.toString() ? `?${params.toString()}` : '';
@@ -425,7 +466,7 @@ export async function getTasks(filter: { channelId?: string; status?: TaskStatus
   return r.json();
 }
 
-export async function createTask(data: { channelId?: string; title: string; assigneeId?: string; creatorName?: string; status?: TaskStatus; type?: TaskType; acceptanceCriteria?: string[]; definitionOfDone?: string[]; constraints?: string[]; dependsOn?: string[] }): Promise<Task> {
+export async function createTask(data: { projectId?: string; channelId?: string; title: string; assigneeId?: string; creatorName?: string; status?: TaskStatus; type?: TaskType; acceptanceCriteria?: string[]; definitionOfDone?: string[]; constraints?: string[]; dependsOn?: string[] }): Promise<Task> {
   const r = await apiFetch(`${API_BASE}/api/tasks`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -539,8 +580,9 @@ export async function cancelReminder(reminderId: string): Promise<Reminder> {
   return r.json();
 }
 
-export async function searchKnowledge(query = '', filters: { kind?: KnowledgeKind; tag?: string } = {}): Promise<KnowledgeSearchResult[]> {
+export async function searchKnowledge(query = '', filters: { projectId?: string; kind?: KnowledgeKind; tag?: string } = {}): Promise<KnowledgeSearchResult[]> {
   const params = new URLSearchParams();
+  if (filters.projectId) params.set('projectId', filters.projectId);
   if (query) params.set('query', query);
   if (filters.kind) params.set('kind', filters.kind);
   if (filters.tag) params.set('tag', filters.tag);
@@ -548,7 +590,7 @@ export async function searchKnowledge(query = '', filters: { kind?: KnowledgeKin
   return r.json();
 }
 
-export async function createKnowledge(data: Omit<KnowledgeEntry, 'id' | 'createdAt' | 'updatedAt'> & { allowNoSource?: boolean }): Promise<KnowledgeEntry> {
+export async function createKnowledge(data: Omit<KnowledgeEntry, 'id' | 'createdAt' | 'updatedAt'> & { projectId?: string; allowNoSource?: boolean }): Promise<KnowledgeEntry> {
   const r = await apiFetch(`${API_BASE}/api/knowledge`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -609,8 +651,9 @@ export async function patchDecision(id: string, data: Partial<Pick<Decision, 'st
   return r.json();
 }
 
-export async function getDocuments(filter: { kind?: DocumentKind; status?: DocumentStatus; channelId?: string } = {}): Promise<Document[]> {
+export async function getDocuments(filter: { projectId?: string; kind?: DocumentKind; status?: DocumentStatus; channelId?: string } = {}): Promise<Document[]> {
   const params = new URLSearchParams();
+  if (filter.projectId) params.set('projectId', filter.projectId);
   if (filter.kind) params.set('kind', filter.kind);
   if (filter.status) params.set('status', filter.status);
   if (filter.channelId) params.set('channelId', filter.channelId);

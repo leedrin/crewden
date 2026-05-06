@@ -6,7 +6,7 @@ import { createKnowledge, patchKnowledge, searchKnowledge } from '../api.js';
 const KINDS: KnowledgeKind[] = ['decision', 'project_archive', 'user_preference', 'runbook', 'learning', 'artifact'];
 const STATUSES: KnowledgeStatus[] = ['active', 'stale', 'conflict', 'archived'];
 
-export function KnowledgePanel() {
+export function KnowledgePanel({ projectId }: { projectId: string }) {
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<KnowledgeKind | ''>('');
   const [tag, setTag] = useState('');
@@ -15,15 +15,16 @@ export function KnowledgePanel() {
   const [form, setForm] = useState({ kind: 'decision' as KnowledgeKind, title: '', summary: '', body: '', tags: '', sourceRefs: '', status: 'active' as KnowledgeStatus });
 
   const load = async () => {
-    const next = await searchKnowledge(query, { kind: kind || undefined, tag: tag.trim() || undefined });
+    const next = await searchKnowledge(query, { projectId, kind: kind || undefined, tag: tag.trim() || undefined });
     setResults(next);
     if (!selected && next[0]) setSelected(next[0].entry);
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [projectId]);
 
   async function handleCreate() {
     const created = await createKnowledge({
+      projectId,
       kind: form.kind,
       title: form.title,
       summary: form.summary,

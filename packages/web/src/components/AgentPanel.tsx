@@ -3,6 +3,7 @@ import type { Agent, Machine, RuntimeStatus } from '../api.js';
 import { createAgent, deleteAgent, respondRuntimePermission, startAgent, stopAgent } from '../api.js';
 
 type Props = {
+  projectId: string;
   agents: Agent[];
   machines: Machine[];
   runtimeStatus?: RuntimeStatus;
@@ -32,7 +33,7 @@ function buildAutoAllowRuleKey(agentId: string, kind: string, name: string): str
   return `${agentId}::${kind}::${name}`;
 }
 
-export function AgentPanel({ agents, machines, runtimeStatus, onAgentsChange, onRuntimeStatusRefresh, onClose }: Props) {
+export function AgentPanel({ projectId, agents, machines, runtimeStatus, onAgentsChange, onRuntimeStatusRefresh, onClose }: Props) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     name: '',
@@ -72,6 +73,7 @@ export function AgentPanel({ agents, machines, runtimeStatus, onAgentsChange, on
     setLoading(true);
     try {
       await createAgent({
+        projectId,
         name: form.name,
         displayName: form.displayName || undefined,
         runtime: form.runtime,

@@ -2,12 +2,14 @@ import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 export const channels = sqliteTable('channels', {
   id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
   name: text('name').notNull(),
   createdAt: text('created_at').notNull(),
 });
 
 export const messages = sqliteTable('messages', {
   id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
   channelId: text('channel_id').notNull(),
   senderName: text('sender_name').notNull(),
   content: text('content').notNull(),
@@ -53,6 +55,7 @@ export const agentTokens = sqliteTable('agent_tokens', {
 
 export const auditLogs = sqliteTable('audit_log', {
   id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
   actorType: text('actor_type').notNull(),
   actorId: text('actor_id'),
   action: text('action').notNull(),
@@ -66,6 +69,7 @@ export const auditLogs = sqliteTable('audit_log', {
 
 export const tasks = sqliteTable('tasks', {
   id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
   channelId: text('channel_id').notNull(),
   messageId: text('message_id'),
   title: text('title').notNull(),
@@ -95,6 +99,7 @@ export const tasks = sqliteTable('tasks', {
 
 export const goals = sqliteTable('goals', {
   id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
   channelId: text('channel_id').notNull(),
   sourceMessageId: text('source_message_id'),
   requesterName: text('requester_name').notNull(),
@@ -111,6 +116,7 @@ export const goals = sqliteTable('goals', {
 
 export const goalAlignments = sqliteTable('goal_alignments', {
   id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
   channelId: text('channel_id').notNull(),
   threadRootId: text('thread_root_id').notNull(),
   sourceMessageId: text('source_message_id').notNull(),
@@ -134,6 +140,7 @@ export const goalAlignments = sqliteTable('goal_alignments', {
 
 export const reminders = sqliteTable('reminders', {
   id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
   agentId: text('agent_id').notNull(),
   channelId: text('channel_id').notNull(),
   message: text('message').notNull(),
@@ -144,6 +151,7 @@ export const reminders = sqliteTable('reminders', {
 
 export const knowledgeEntries = sqliteTable('knowledge_entries', {
   id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
   kind: text('kind').notNull(),
   title: text('title').notNull(),
   summary: text('summary').notNull(),
@@ -159,6 +167,7 @@ export const knowledgeEntries = sqliteTable('knowledge_entries', {
 
 export const decisions = sqliteTable('decisions', {
   id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
   channelId: text('channel_id').notNull(),
   sourceThreadId: text('source_thread_id'),
   title: text('title').notNull(),
@@ -178,6 +187,7 @@ export const decisions = sqliteTable('decisions', {
 
 export const documents = sqliteTable('documents', {
   id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
   kind: text('kind').notNull(),
   title: text('title').notNull(),
   status: text('status').notNull().default('draft'),
@@ -198,6 +208,7 @@ export const documents = sqliteTable('documents', {
 
 export const agents = sqliteTable('agents', {
   id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
   name: text('name').notNull(),
   displayName: text('display_name'),
   description: text('description'),
@@ -246,4 +257,14 @@ export const machines = sqliteTable('machines', {
   runtimeVersions: text('runtime_versions').notNull(),
   status: text('status').notNull(),
   connectedAt: text('connected_at').notNull(),
+});
+
+export const projects = sqliteTable('projects', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  slug: text('slug').notNull(),
+  description: text('description').notNull().default(''),
+  paseoProjectId: text('paseo_project_id'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
 });

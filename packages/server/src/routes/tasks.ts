@@ -8,10 +8,11 @@ import { requireAgentPermission } from '../agentPermissions.js';
 import { resolveActingAgent } from '../requestAgentAuth.js';
 
 export async function taskRoutes(app: FastifyInstance) {
-  app.get<{ Querystring: { channelId?: string; status?: string } }>('/api/tasks', async (req, reply) => {
+  app.get<{ Querystring: { projectId?: string; channelId?: string; status?: string } }>('/api/tasks', async (req, reply) => {
     const status = req.query.status === undefined ? undefined : TaskStatusSchema.safeParse(req.query.status);
     if (status && !status.success) return reply.status(400).send({ error: 'Invalid status' });
     return getStore().listTasks({
+      projectId: req.query.projectId,
       channelId: req.query.channelId,
       status: status?.success ? status.data : undefined,
     });
@@ -25,7 +26,7 @@ export async function taskRoutes(app: FastifyInstance) {
     if (actingAgent && !(await requireAgentPermission(actingAgent.id, 'createTasks'))) {
       return reply.status(403).send({ error: 'Agent does not have permission: create_tasks' });
     }
-    const channel = await getStore().getChannel(parsed.data.channelId);
+    const channel = await getStore().getChannel(parsed.data.channelId, { projectId: parsed.data.projectId });
     if (!channel) return reply.status(404).send({ error: 'Channel not found' });
 
     const taskId = nanoid();
@@ -34,6 +35,7 @@ export async function taskRoutes(app: FastifyInstance) {
 
     const task = await getStore().createTask({
       id: taskId,
+      projectId: channel.projectId,
       channelId: parsed.data.channelId,
       messageId: parsed.data.messageId,
       title: parsed.data.title,
@@ -55,6 +57,7 @@ export async function taskRoutes(app: FastifyInstance) {
       context: parsed.data.context,
     });
     await getStore().appendAuditLog({
+      projectId: task.projectId,
       actorType: parsed.data.creatorType,
       actorId: parsed.data.creatorId ?? parsed.data.creatorName,
       action: 'task.created',
@@ -96,6 +99,7 @@ export async function taskRoutes(app: FastifyInstance) {
     if (!task) return reply.status(404).send({ error: 'Task not found' });
     if (patch.status && patch.status !== existing.status) {
       await store.appendAuditLog({
+        projectId: task.projectId,
         actorType: existing.creator.actorType,
         actorId: existing.creator.actorId,
         action: 'task.status_changed',
@@ -126,6 +130,7 @@ export async function taskRoutes(app: FastifyInstance) {
 
     const task = await store.createTask({
       id: nanoid(),
+      projectId: message.projectId,
       channelId: message.channelId,
       messageId: message.id,
       title: message.content.slice(0, 200),
@@ -182,6 +187,7 @@ export async function taskRoutes(app: FastifyInstance) {
     if (!taskUpdated) return reply.status(404).send({ error: 'Task not found' });
     if (taskUpdated.status !== task.status) {
       await store.appendAuditLog({
+        projectId: taskUpdated.projectId,
         actorType: parsed.data.requesterAgentId ? 'agent' : 'human',
         actorId: parsed.data.requesterAgentId ?? task.creator.actorId,
         action: 'task.status_changed',
@@ -208,7 +214,7 @@ async function reviewDecision(reviewId: string, body: unknown, status: 'approved
   const parsed = ReviewDecisionRequestSchema.safeParse(body);
   if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
   const store = getStore();
-  const task = (await store.listTasks()).find((candidate) => candidate.context?.reviews?.some((review) => review.id === reviewId));
+    const task = (await store.listTasks()).find((candidate) => candidate.context?.reviews?.some((review) => review.id === reviewId));
   if (!task) return reply.status(404).send({ error: 'Review not found' });
   const nextTaskStatus = status === 'approved' ? 'done' : 'changes_requested';
   if (!isTaskTransitionAllowed(task.status, nextTaskStatus)) {
@@ -229,6 +235,7 @@ async function reviewDecision(reviewId: string, body: unknown, status: 'approved
   if (!updated) return reply.status(404).send({ error: 'Task not found' });
   if (updated.status !== task.status) {
     await store.appendAuditLog({
+      projectId: updated.projectId,
       actorType: parsed.data.reviewerAgentId ? 'agent' : 'human',
       actorId: parsed.data.reviewerAgentId ?? task.creator.actorId,
       action: 'task.status_changed',
