@@ -25,6 +25,9 @@ export const ReviewStatusSchema = z.enum(['requested', 'changes_requested', 'app
 export const ReminderStatusSchema = z.enum(['pending', 'triggered', 'cancelled']);
 export const KnowledgeKindSchema = z.enum(['decision', 'project_archive', 'user_preference', 'runbook', 'learning', 'artifact']);
 export const KnowledgeStatusSchema = z.enum(['active', 'stale', 'conflict', 'archived']);
+export const DecisionStatusSchema = z.enum(['proposed', 'accepted', 'deprecated', 'superseded']);
+export const DocumentStatusSchema = z.enum(['draft', 'in_review', 'approved', 'deprecated', 'superseded']);
+export const DocumentKindSchema = z.enum(['prd', 'tdd', 'adr', 'rfc', 'test_plan', 'runbook', 'postmortem']);
 
 export const MentionSchema = z.object({
   type: z.enum(['agent', 'user']),
@@ -153,6 +156,8 @@ export const TaskContextSchema = z.object({
     createdAt: z.string(),
     updatedAt: z.string(),
   })).optional(),
+  relatedDecisionIds: z.array(z.string().min(1)).optional(),
+  relatedDocumentIds: z.array(z.string().min(1)).optional(),
 }).partial();
 
 export const KnowledgeEntrySchema = z.object({
@@ -607,6 +612,122 @@ export const GoalAlignmentSchema = z.object({
   updatedAt: z.string(),
 });
 
+export const DecisionParticipantSchema = z.object({
+  actorType: ActorTypeSchema,
+  actorId: z.string().min(1),
+  role: z.string().optional(),
+});
+
+export const DecisionSchema = z.object({
+  id: z.string(),
+  channelId: z.string(),
+  sourceThreadId: z.string().optional(),
+  title: z.string().min(1),
+  status: DecisionStatusSchema,
+  problem: z.string().min(1),
+  alternatives: z.array(z.string().min(1)).optional(),
+  decisionText: z.string().min(1),
+  rationale: z.string().optional(),
+  consequences: z.array(z.string().min(1)).optional(),
+  participants: z.array(DecisionParticipantSchema).optional(),
+  relatedDecisions: z.array(z.string().min(1)).optional(),
+  supersededBy: z.string().optional(),
+  acceptedAt: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const CreateDecisionRequestSchema = z.object({
+  channelId: z.string().min(1),
+  sourceThreadId: z.string().optional(),
+  title: z.string().min(1).max(200),
+  status: DecisionStatusSchema.default('proposed'),
+  problem: z.string().min(1),
+  alternatives: z.array(z.string().min(1)).default([]),
+  decisionText: z.string().min(1),
+  rationale: z.string().optional(),
+  consequences: z.array(z.string().min(1)).default([]),
+  participants: z.array(DecisionParticipantSchema).default([]),
+  relatedDecisions: z.array(z.string().min(1)).default([]),
+});
+
+export const PatchDecisionRequestSchema = z
+  .object({
+    status: DecisionStatusSchema.optional(),
+    title: z.string().min(1).max(200).optional(),
+    problem: z.string().min(1).optional(),
+    alternatives: z.array(z.string().min(1)).optional(),
+    decisionText: z.string().min(1).optional(),
+    rationale: z.string().optional(),
+    consequences: z.array(z.string().min(1)).optional(),
+    participants: z.array(DecisionParticipantSchema).optional(),
+    relatedDecisions: z.array(z.string().min(1)).optional(),
+  })
+  .refine((value) => Object.values(value).some((item) => item !== undefined), {
+    message: 'At least one field must be provided',
+  });
+
+export const DecisionTransitionRequestSchema = z.object({
+  supersededBy: z.string().min(1).optional(),
+});
+
+export const DocumentReviewerSchema = z.object({
+  actorType: ActorTypeSchema,
+  actorId: z.string().min(1),
+});
+
+export const DocumentSchema = z.object({
+  id: z.string(),
+  kind: DocumentKindSchema,
+  title: z.string().min(1),
+  status: DocumentStatusSchema,
+  content: z.string(),
+  sourceThreadId: z.string().optional(),
+  sourceChannelId: z.string(),
+  author: ActorSchema,
+  authorName: z.string().min(1),
+  reviewers: z.array(DocumentReviewerSchema).optional(),
+  relatedDecisions: z.array(z.string().min(1)).optional(),
+  relatedTasks: z.array(z.string().min(1)).optional(),
+  supersededBy: z.string().optional(),
+  approvedAt: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const CreateDocumentRequestSchema = z.object({
+  kind: DocumentKindSchema,
+  title: z.string().min(1).max(200),
+  content: z.string().default(''),
+  sourceThreadId: z.string().optional(),
+  sourceChannelId: z.string().min(1),
+  authorType: ActorTypeSchema.default('human'),
+  authorId: z.string().min(1),
+  authorName: z.string().min(1),
+  relatedDecisions: z.array(z.string().min(1)).default([]),
+  relatedTasks: z.array(z.string().min(1)).default([]),
+});
+
+export const PatchDocumentRequestSchema = z
+  .object({
+    title: z.string().min(1).max(200).optional(),
+    content: z.string().optional(),
+    relatedDecisions: z.array(z.string().min(1)).optional(),
+    relatedTasks: z.array(z.string().min(1)).optional(),
+  })
+  .refine((value) => Object.values(value).some((item) => item !== undefined), {
+    message: 'At least one field must be provided',
+  });
+
+export const SubmitDocumentReviewRequestSchema = z.object({
+  reviewers: z.array(DocumentReviewerSchema).min(1),
+});
+
+export const ApproveDocumentRequestSchema = z.object({
+  actorType: ActorTypeSchema,
+  actorId: z.string().min(1),
+});
+
 export const CreateGoalTasksRequestSchema = z.object({
   creatorName: z.string().min(1).default('user'),
   tasks: z.array(GoalTaskDraftSchema).min(1),
@@ -805,6 +926,13 @@ export type CreateGoalTasksRequest = z.infer<typeof CreateGoalTasksRequestSchema
 export type StartGoalAlignmentRequest = z.infer<typeof StartGoalAlignmentRequestSchema>;
 export type PatchGoalAlignmentRequest = z.infer<typeof PatchGoalAlignmentRequestSchema>;
 export type ConfirmGoalAlignmentRequest = z.infer<typeof ConfirmGoalAlignmentRequestSchema>;
+export type CreateDecisionRequest = z.infer<typeof CreateDecisionRequestSchema>;
+export type PatchDecisionRequest = z.infer<typeof PatchDecisionRequestSchema>;
+export type DecisionTransitionRequest = z.infer<typeof DecisionTransitionRequestSchema>;
+export type CreateDocumentRequest = z.infer<typeof CreateDocumentRequestSchema>;
+export type PatchDocumentRequest = z.infer<typeof PatchDocumentRequestSchema>;
+export type SubmitDocumentReviewRequest = z.infer<typeof SubmitDocumentReviewRequestSchema>;
+export type ApproveDocumentRequest = z.infer<typeof ApproveDocumentRequestSchema>;
 export type TaskContextRequest = z.infer<typeof TaskContextSchema>;
 export type InternalMessageSendRequest = z.infer<typeof InternalMessageSendRequestSchema>;
 export type InternalMessageReadRequest = z.infer<typeof InternalMessageReadRequestSchema>;

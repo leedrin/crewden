@@ -596,6 +596,122 @@ export function createToolDefinitions(): ToolDefinition[] {
       },
     },
     {
+      name: "crewden_list_decisions",
+      title: "List Decisions",
+      description: "List architecture/product decisions by channel/status.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          channelId: { type: "string", description: "Channel id." },
+          status: { type: "string", description: "proposed|accepted|deprecated|superseded" },
+        },
+        additionalProperties: false,
+      },
+      run: async (args, { client }) => {
+        return client.get(agentPath(client, "/decisions"), {
+          query: {
+            channelId: asString(args.channelId),
+            status: asString(args.status),
+          },
+        });
+      },
+    },
+    {
+      name: "crewden_create_decision",
+      title: "Create Decision",
+      description: "Create a decision (ADR-style) record.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          channelId: { type: "string", description: "Channel id." },
+          sourceThreadId: { type: "string", description: "Source thread id." },
+          title: { type: "string", description: "Decision title." },
+          problem: { type: "string", description: "Problem statement." },
+          decisionText: { type: "string", description: "Decision conclusion." },
+          rationale: { type: "string", description: "Rationale." },
+          alternatives: { type: "array", items: { type: "string" } },
+          consequences: { type: "array", items: { type: "string" } },
+        },
+        required: ["channelId", "title", "problem", "decisionText"],
+        additionalProperties: false,
+      },
+      run: async (args, { client }) => {
+        return client.post(agentPath(client, "/decisions/create"), {
+          body: {
+            channelId: requiredString(args.channelId, "channelId"),
+            sourceThreadId: asString(args.sourceThreadId),
+            title: requiredString(args.title, "title"),
+            problem: requiredString(args.problem, "problem"),
+            decisionText: requiredString(args.decisionText, "decisionText"),
+            rationale: asString(args.rationale),
+            alternatives: asStringArray(args.alternatives),
+            consequences: asStringArray(args.consequences),
+          },
+        });
+      },
+    },
+    {
+      name: "crewden_list_documents",
+      title: "List Documents",
+      description: "List documents by kind/status/channel.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          kind: { type: "string", description: "prd|tdd|adr|rfc|test_plan|runbook|postmortem" },
+          status: { type: "string", description: "draft|in_review|approved|deprecated|superseded" },
+          channelId: { type: "string", description: "Source channel id." },
+        },
+        additionalProperties: false,
+      },
+      run: async (args, { client }) => {
+        return client.get(agentPath(client, "/documents"), {
+          query: {
+            kind: asString(args.kind),
+            status: asString(args.status),
+            channelId: asString(args.channelId),
+          },
+        });
+      },
+    },
+    {
+      name: "crewden_create_document",
+      title: "Create Document",
+      description: "Create a PRD/TDD/ADR/RFC/test plan/runbook/postmortem document.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          kind: { type: "string", description: "Document kind." },
+          title: { type: "string", description: "Document title." },
+          content: { type: "string", description: "Markdown content." },
+          sourceChannelId: { type: "string", description: "Source channel id." },
+          sourceThreadId: { type: "string", description: "Source thread id." },
+          relatedDecisions: { type: "array", items: { type: "string" } },
+          relatedTasks: { type: "array", items: { type: "string" } },
+        },
+        required: ["kind", "title", "sourceChannelId"],
+        additionalProperties: false,
+      },
+      run: async (args, { client }) => {
+        const info = await client.get(agentPath(client, "/auth/whoami")) as { agent?: { id?: string; displayName?: string; name?: string } };
+        const actorId = info.agent?.id ?? client.getAgentId();
+        const actorName = info.agent?.displayName ?? info.agent?.name ?? actorId;
+        return client.post(agentPath(client, "/documents/create"), {
+          body: {
+            kind: requiredString(args.kind, "kind"),
+            title: requiredString(args.title, "title"),
+            content: asString(args.content) ?? "",
+            sourceChannelId: requiredString(args.sourceChannelId, "sourceChannelId"),
+            sourceThreadId: asString(args.sourceThreadId),
+            authorType: "agent",
+            authorId: actorId,
+            authorName: actorName,
+            relatedDecisions: asStringArray(args.relatedDecisions),
+            relatedTasks: asStringArray(args.relatedTasks),
+          },
+        });
+      },
+    },
+    {
       name: "crewden_search_knowledge",
       title: "Search Knowledge",
       description: "Search knowledge entries.",

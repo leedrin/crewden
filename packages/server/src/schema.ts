@@ -157,6 +157,45 @@ export const knowledgeEntries = sqliteTable('knowledge_entries', {
   updatedAt: text('updated_at').notNull(),
 });
 
+export const decisions = sqliteTable('decisions', {
+  id: text('id').primaryKey(),
+  channelId: text('channel_id').notNull(),
+  sourceThreadId: text('source_thread_id'),
+  title: text('title').notNull(),
+  status: text('status').notNull().default('proposed'),
+  problem: text('problem').notNull(),
+  alternatives: text('alternatives'),
+  decisionText: text('decision_text').notNull(),
+  rationale: text('rationale'),
+  consequences: text('consequences'),
+  participants: text('participants'),
+  relatedDecisions: text('related_decisions'),
+  supersededBy: text('superseded_by'),
+  acceptedAt: text('accepted_at'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const documents = sqliteTable('documents', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull(),
+  title: text('title').notNull(),
+  status: text('status').notNull().default('draft'),
+  content: text('content').notNull().default(''),
+  sourceThreadId: text('source_thread_id'),
+  sourceChannelId: text('source_channel_id').notNull(),
+  authorType: text('author_type').notNull(),
+  authorId: text('author_id').notNull(),
+  authorName: text('author_name').notNull(),
+  reviewers: text('reviewers'),
+  relatedDecisions: text('related_decisions'),
+  relatedTasks: text('related_tasks'),
+  supersededBy: text('superseded_by'),
+  approvedAt: text('approved_at'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
 export const agents = sqliteTable('agents', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),

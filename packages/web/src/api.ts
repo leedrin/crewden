@@ -9,7 +9,46 @@ export type Mention = { type: 'agent' | 'user'; id: string; label: string };
 export type ActorType = 'human' | 'agent' | 'system';
 export type Actor = { actorType: ActorType; actorId: string };
 export type Message = { id: string; channelId: string; senderName: string; content: string; actorType: ActorType; actorId: string; agentId?: string; threadRootId?: string; replyCount?: number; latestReplyAt?: string; mentions?: Mention[]; createdAt: string };
-export type MessageThread = { root: Message; replies: Message[] };
+export type DecisionStatus = 'proposed' | 'accepted' | 'deprecated' | 'superseded';
+export type DocumentStatus = 'draft' | 'in_review' | 'approved' | 'deprecated' | 'superseded';
+export type DocumentKind = 'prd' | 'tdd' | 'adr' | 'rfc' | 'test_plan' | 'runbook' | 'postmortem';
+export type Decision = {
+  id: string;
+  channelId: string;
+  sourceThreadId?: string;
+  title: string;
+  status: DecisionStatus;
+  problem: string;
+  alternatives?: string[];
+  decisionText: string;
+  rationale?: string;
+  consequences?: string[];
+  participants?: Array<{ actorType: ActorType; actorId: string; role?: string }>;
+  relatedDecisions?: string[];
+  supersededBy?: string;
+  acceptedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type Document = {
+  id: string;
+  kind: DocumentKind;
+  title: string;
+  status: DocumentStatus;
+  content: string;
+  sourceThreadId?: string;
+  sourceChannelId: string;
+  author: Actor;
+  authorName: string;
+  reviewers?: Array<{ actorType: ActorType; actorId: string }>;
+  relatedDecisions?: string[];
+  relatedTasks?: string[];
+  supersededBy?: string;
+  approvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type MessageThread = { root: Message; replies: Message[]; linkedDecisions?: Decision[]; linkedDocuments?: Document[] };
 export type SearchMessageResult = Message & { channelName: string };
 export type AgentOrganization = { department?: string; roles?: string[]; capabilities?: string[]; responsibilities?: string[]; managerId?: string; backupAgentIds?: string[]; availability?: 'available' | 'unavailable' | 'overloaded' };
 export type AgentRole = 'unassigned' | 'product' | 'architect' | 'developer' | 'qa' | 'reviewer' | 'security' | 'devops' | 'documentation' | 'coordinator' | 'planner';
@@ -104,7 +143,7 @@ export type GoalAlignmentStatus = 'needs_clarification' | 'awaiting_confirmation
 export type GoalAlignmentRiskLevel = 'low' | 'medium' | 'high';
 export type TaskProgressEvent = { id: string; taskId: string; agentId: string; type: 'claimed' | 'started' | 'heartbeat' | 'blocked' | 'handoff' | 'completed' | 'escalated'; detail: string; createdAt: string };
 export type TaskReview = { id: string; taskId: string; requesterAgentId?: string; reviewerAgentId?: string; status: 'requested' | 'changes_requested' | 'approved' | 'cancelled'; evidence: string[]; checklist: Array<{ label: string; checked: boolean }>; comment?: string; createdAt: string; updatedAt: string };
-export type TaskContext = { goalId?: string; goalObjective?: string; goal?: string; background?: string; acceptanceCriteria?: string[]; constraints?: string[]; assumptions?: string[]; risks?: string[]; dependencies?: string[]; blockedByTaskIds?: string[]; sourceMessageIds?: string[]; artifacts?: string[]; requesterAgentId?: string; previousAgentId?: string; handoffNotes?: string[]; privateNotes?: string[]; claimedByAgentId?: string; blockedReason?: string; blockedNeeds?: string; escalatedReason?: string; progressEvents?: TaskProgressEvent[]; reviewerAgentId?: string; evidence?: string[]; acceptanceChecklist?: string[]; reviewIds?: string[]; reviewNotes?: string[]; reviews?: TaskReview[] };
+export type TaskContext = { goalId?: string; goalObjective?: string; goal?: string; background?: string; acceptanceCriteria?: string[]; constraints?: string[]; assumptions?: string[]; risks?: string[]; dependencies?: string[]; blockedByTaskIds?: string[]; sourceMessageIds?: string[]; artifacts?: string[]; requesterAgentId?: string; previousAgentId?: string; handoffNotes?: string[]; privateNotes?: string[]; claimedByAgentId?: string; blockedReason?: string; blockedNeeds?: string; escalatedReason?: string; progressEvents?: TaskProgressEvent[]; reviewerAgentId?: string; evidence?: string[]; acceptanceChecklist?: string[]; reviewIds?: string[]; reviewNotes?: string[]; reviews?: TaskReview[]; relatedDecisionIds?: string[]; relatedDocumentIds?: string[] };
 export type Task = {
   id: string;
   channelId: string;
@@ -526,5 +565,77 @@ export async function patchKnowledge(id: string, data: Partial<Pick<KnowledgeEnt
     body: JSON.stringify(data),
   });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Update knowledge failed');
+  return r.json();
+}
+
+export async function getChannelDecisions(channelId: string, status?: DecisionStatus): Promise<Decision[]> {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  const r = await apiFetch(`${API_BASE}/api/channels/${encodeURIComponent(channelId)}/decisions${params.toString() ? `?${params.toString()}` : ''}`, {
+    headers: authHeaders(),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Load decisions failed');
+  return r.json();
+}
+
+export async function createDecision(data: {
+  channelId: string;
+  sourceThreadId?: string;
+  title: string;
+  problem: string;
+  alternatives?: string[];
+  decisionText: string;
+  rationale?: string;
+  consequences?: string[];
+  participants?: Array<{ actorType: ActorType; actorId: string; role?: string }>;
+  relatedDecisions?: string[];
+}): Promise<Decision> {
+  const r = await apiFetch(`${API_BASE}/api/decisions`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Create decision failed');
+  return r.json();
+}
+
+export async function patchDecision(id: string, data: Partial<Pick<Decision, 'status' | 'title' | 'problem' | 'alternatives' | 'decisionText' | 'rationale' | 'consequences' | 'participants' | 'relatedDecisions'>>): Promise<Decision> {
+  const r = await apiFetch(`${API_BASE}/api/decisions/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Update decision failed');
+  return r.json();
+}
+
+export async function getDocuments(filter: { kind?: DocumentKind; status?: DocumentStatus; channelId?: string } = {}): Promise<Document[]> {
+  const params = new URLSearchParams();
+  if (filter.kind) params.set('kind', filter.kind);
+  if (filter.status) params.set('status', filter.status);
+  if (filter.channelId) params.set('channelId', filter.channelId);
+  const r = await apiFetch(`${API_BASE}/api/documents${params.toString() ? `?${params.toString()}` : ''}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Load documents failed');
+  return r.json();
+}
+
+export async function createDocument(data: {
+  kind: DocumentKind;
+  title: string;
+  content: string;
+  sourceThreadId?: string;
+  sourceChannelId: string;
+  authorType: ActorType;
+  authorId: string;
+  authorName: string;
+  relatedDecisions?: string[];
+  relatedTasks?: string[];
+}): Promise<Document> {
+  const r = await apiFetch(`${API_BASE}/api/documents`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Create document failed');
   return r.json();
 }

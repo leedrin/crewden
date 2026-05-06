@@ -36,6 +36,12 @@ import {
   CreateKnowledgeEntryRequestSchema,
   PatchKnowledgeEntryRequestSchema,
   SearchKnowledgeRequestSchema,
+  CreateDecisionRequestSchema,
+  PatchDecisionRequestSchema,
+  CreateDocumentRequestSchema,
+  PatchDocumentRequestSchema,
+  SubmitDocumentReviewRequestSchema,
+  ApproveDocumentRequestSchema,
   PatchTaskRequestSchema,
   MessageSchema,
   AuditLogEntrySchema,
@@ -286,6 +292,33 @@ describe('Agent permission schema', () => {
     expect(parsed.createTasks).toBe(false);
     expect(parsed.claimTasks).toBe(true);
     expect(parsed.maxContextTokens).toBe(100000);
+  });
+});
+
+describe('Decision/Document schemas', () => {
+  it('accepts decision create/patch payloads', () => {
+    expect(CreateDecisionRequestSchema.safeParse({
+      channelId: 'general',
+      title: 'Use ADR',
+      problem: 'Need durable decision history',
+      decisionText: 'Adopt ADR documents',
+    }).success).toBe(true);
+    expect(PatchDecisionRequestSchema.safeParse({ status: 'accepted' }).success).toBe(true);
+    expect(PatchDecisionRequestSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('accepts document lifecycle payloads', () => {
+    expect(CreateDocumentRequestSchema.safeParse({
+      kind: 'prd',
+      title: 'Roadmap',
+      sourceChannelId: 'general',
+      authorType: 'human',
+      authorId: 'user',
+      authorName: 'user',
+    }).success).toBe(true);
+    expect(PatchDocumentRequestSchema.safeParse({ content: '# Update' }).success).toBe(true);
+    expect(SubmitDocumentReviewRequestSchema.safeParse({ reviewers: [{ actorType: 'agent', actorId: 'qa' }] }).success).toBe(true);
+    expect(ApproveDocumentRequestSchema.safeParse({ actorType: 'human', actorId: 'user' }).success).toBe(true);
   });
 });
 

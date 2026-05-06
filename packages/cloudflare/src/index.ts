@@ -6,6 +6,8 @@ import type {
   AgentInboxItem,
   BrowserEvent,
   Channel,
+  Decision,
+  DecisionStatus,
   DaemonToServer,
   DirectMessage,
   DirectMessageThread,
@@ -13,6 +15,9 @@ import type {
   GoalAlignmentStatus,
   GoalBrief,
   GoalBriefStatus,
+  Document,
+  DocumentKind,
+  DocumentStatus,
   KnowledgeEntry,
   KnowledgeKind,
   KnowledgeSearchResult,
@@ -41,6 +46,8 @@ import {
   CreateGoalBriefRequestSchema,
   CreateGoalTasksRequestSchema,
   ConfirmGoalAlignmentRequestSchema,
+  CreateDecisionRequestSchema,
+  CreateDocumentRequestSchema,
   CreateKnowledgeEntryRequestSchema,
   CreateReminderRequestSchema,
   CreateTaskReviewRequestSchema,
@@ -72,12 +79,20 @@ import {
   PatchGoalAlignmentRequestSchema,
   PatchKnowledgeEntryRequestSchema,
   PatchAgentRequestSchema,
+  PatchDecisionRequestSchema,
+  PatchDocumentRequestSchema,
   PatchReminderRequestSchema,
   PatchTaskRequestSchema,
   ReviewDecisionRequestSchema,
   SearchRequestSchema,
   SearchKnowledgeRequestSchema,
   StartGoalAlignmentRequestSchema,
+  DecisionStatusSchema,
+  DocumentKindSchema,
+  DocumentStatusSchema,
+  DecisionTransitionRequestSchema,
+  SubmitDocumentReviewRequestSchema,
+  ApproveDocumentRequestSchema,
   TaskStatusSchema,
 } from '@crewden/shared';
 import { buildClarifyingQuestions, findDuplicateMachineIds, inferGoalRiskLevel, recommendAgentsForGoal, resolveAgentReference, resolveAgents, resolveStartMachineId, toAgentDelivery, toRuntimeConfig } from '@crewden/hub-core';
@@ -349,6 +364,98 @@ export class CrewdenHub extends DurableObject<Env> {
         const entry = this.archiveGoal(decodeURIComponent(goalArchiveMatch[1]));
         if (!entry) return json({ error: 'Goal not found' }, 404);
         return json(entry, 201);
+      }
+
+      const channelDecisionsMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/decisions$/);
+      if (channelDecisionsMatch && request.method === 'GET') {
+        const channelId = decodeURIComponent(channelDecisionsMatch[1]);
+        if (!this.getChannel(channelId)) return json({ error: 'Channel not found' }, 404);
+        const statusValue = url.searchParams.get('status') ?? undefined;
+        const status = statusValue === undefined ? undefined : DecisionStatusSchema.safeParse(statusValue);
+        if (status && !status.success) return json({ error: 'Invalid decision status' }, 400);
+        return json(this.listDecisions({ channelId, status: status?.success ? status.data : undefined }));
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/decisions') {
+        return this.createDecision(await request.json().catch(() => ({})));
+      }
+
+      const decisionMatch = url.pathname.match(/^\/api\/decisions\/([^/]+)$/);
+      if (decisionMatch && request.method === 'GET') {
+        const decision = this.getDecision(decodeURIComponent(decisionMatch[1]));
+        if (!decision) return json({ error: 'Decision not found' }, 404);
+        return json(decision);
+      }
+      if (decisionMatch && request.method === 'PATCH') {
+        return this.patchDecision(decodeURIComponent(decisionMatch[1]), await request.json().catch(() => ({})));
+      }
+
+      const decisionDeprecateMatch = url.pathname.match(/^\/api\/decisions\/([^/]+)\/deprecate$/);
+      if (decisionDeprecateMatch && request.method === 'POST') {
+        return this.deprecateDecision(decodeURIComponent(decisionDeprecateMatch[1]));
+      }
+
+      const decisionSupersedeMatch = url.pathname.match(/^\/api\/decisions\/([^/]+)\/supersede$/);
+      if (decisionSupersedeMatch && request.method === 'POST') {
+        return this.supersedeDecision(decodeURIComponent(decisionSupersedeMatch[1]), await request.json().catch(() => ({})));
+      }
+
+      const messageDecisionMatch = url.pathname.match(/^\/api\/messages\/([^/]+)\/to-decision$/);
+      if (messageDecisionMatch && request.method === 'POST') {
+        return this.createDecisionFromMessage(decodeURIComponent(messageDecisionMatch[1]), await request.json().catch(() => ({})));
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/documents') {
+        const kindValue = url.searchParams.get('kind') ?? undefined;
+        const statusValue = url.searchParams.get('status') ?? undefined;
+        const kind = kindValue === undefined ? undefined : DocumentKindSchema.safeParse(kindValue);
+        if (kind && !kind.success) return json({ error: 'Invalid document kind' }, 400);
+        const status = statusValue === undefined ? undefined : DocumentStatusSchema.safeParse(statusValue);
+        if (status && !status.success) return json({ error: 'Invalid document status' }, 400);
+        return json(this.listDocuments({
+          sourceChannelId: url.searchParams.get('channelId') ?? undefined,
+          kind: kind?.success ? kind.data : undefined,
+          status: status?.success ? status.data : undefined,
+        }));
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/documents') {
+        return this.createDocument(await request.json().catch(() => ({})));
+      }
+
+      const documentMatch = url.pathname.match(/^\/api\/documents\/([^/]+)$/);
+      if (documentMatch && request.method === 'GET') {
+        const document = this.getDocument(decodeURIComponent(documentMatch[1]));
+        if (!document) return json({ error: 'Document not found' }, 404);
+        return json(document);
+      }
+      if (documentMatch && request.method === 'PATCH') {
+        return this.patchDocument(decodeURIComponent(documentMatch[1]), await request.json().catch(() => ({})));
+      }
+
+      const documentSubmitReviewMatch = url.pathname.match(/^\/api\/documents\/([^/]+)\/submit-review$/);
+      if (documentSubmitReviewMatch && request.method === 'POST') {
+        return this.submitDocumentReview(decodeURIComponent(documentSubmitReviewMatch[1]), await request.json().catch(() => ({})));
+      }
+
+      const documentApproveMatch = url.pathname.match(/^\/api\/documents\/([^/]+)\/approve$/);
+      if (documentApproveMatch && request.method === 'POST') {
+        return this.approveDocument(decodeURIComponent(documentApproveMatch[1]), await request.json().catch(() => ({})));
+      }
+
+      const documentDeprecateMatch = url.pathname.match(/^\/api\/documents\/([^/]+)\/deprecate$/);
+      if (documentDeprecateMatch && request.method === 'POST') {
+        return this.deprecateDocument(decodeURIComponent(documentDeprecateMatch[1]));
+      }
+
+      const documentSupersedeMatch = url.pathname.match(/^\/api\/documents\/([^/]+)\/supersede$/);
+      if (documentSupersedeMatch && request.method === 'POST') {
+        return this.supersedeDocument(decodeURIComponent(documentSupersedeMatch[1]), await request.json().catch(() => ({})));
+      }
+
+      const messageDocumentMatch = url.pathname.match(/^\/api\/messages\/([^/]+)\/to-document$/);
+      if (messageDocumentMatch && request.method === 'POST') {
+        return this.createDocumentFromMessage(decodeURIComponent(messageDocumentMatch[1]), await request.json().catch(() => ({})));
       }
 
       if (request.method === 'GET' && url.pathname === '/api/agents') {
@@ -856,6 +963,52 @@ export class CrewdenHub extends DurableObject<Env> {
       )
     `);
     this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS decisions (
+        id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        source_thread_id TEXT,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'proposed',
+        problem TEXT NOT NULL,
+        alternatives TEXT,
+        decision_text TEXT NOT NULL,
+        rationale TEXT,
+        consequences TEXT,
+        participants TEXT,
+        related_decisions TEXT,
+        superseded_by TEXT,
+        accepted_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS idx_decisions_channel ON decisions(channel_id)`);
+    this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS idx_decisions_status ON decisions(status)`);
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS documents (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        content TEXT NOT NULL DEFAULT '',
+        source_thread_id TEXT,
+        source_channel_id TEXT NOT NULL,
+        author_type TEXT NOT NULL,
+        author_id TEXT NOT NULL,
+        author_name TEXT NOT NULL,
+        reviewers TEXT,
+        related_decisions TEXT,
+        related_tasks TEXT,
+        superseded_by TEXT,
+        approved_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS idx_documents_channel ON documents(source_channel_id)`);
+    this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS idx_documents_kind ON documents(kind)`);
+    this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status)`);
+    this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS activities (
         id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
@@ -1148,6 +1301,228 @@ export class CrewdenHub extends DurableObject<Env> {
     return json(entry);
   }
 
+  private createDecision(body: unknown): Response {
+    const parsed = CreateDecisionRequestSchema.safeParse(body);
+    if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
+    if (parsed.data.status !== 'proposed') return json({ error: 'Decision must start in proposed status' }, 422);
+    const channel = this.getChannel(parsed.data.channelId);
+    if (!channel) return json({ error: 'Channel not found' }, 404);
+    const decision = this.writeDecision({
+      id: crypto.randomUUID(),
+      channelId: parsed.data.channelId,
+      sourceThreadId: parsed.data.sourceThreadId,
+      title: parsed.data.title,
+      status: 'proposed',
+      problem: parsed.data.problem,
+      alternatives: parsed.data.alternatives,
+      decisionText: parsed.data.decisionText,
+      rationale: parsed.data.rationale,
+      consequences: parsed.data.consequences,
+      participants: parsed.data.participants,
+      relatedDecisions: parsed.data.relatedDecisions,
+    });
+    this.appendAuditLog({
+      actorType: 'human',
+      actorId: 'user',
+      action: 'decision.created',
+      entityType: 'decision',
+      entityId: decision.id,
+      detailJson: { status: decision.status, channelId: decision.channelId },
+    });
+    return json(decision, 201);
+  }
+
+  private patchDecision(id: string, body: unknown): Response {
+    const parsed = PatchDecisionRequestSchema.safeParse(body);
+    if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
+    const existing = this.getDecision(id);
+    if (!existing) return json({ error: 'Decision not found' }, 404);
+    if (parsed.data.status && parsed.data.status !== existing.status) {
+      if (!(existing.status === 'proposed' && parsed.data.status === 'accepted')) {
+        return json({ error: 'Invalid decision status transition', from: existing.status, to: parsed.data.status }, 422);
+      }
+    }
+    const updated = this.updateDecision(id, {
+      ...parsed.data,
+      acceptedAt: parsed.data.status === 'accepted' ? new Date().toISOString() : existing.acceptedAt,
+    });
+    if (!updated) return json({ error: 'Decision not found' }, 404);
+    this.appendAuditLog({
+      actorType: 'human',
+      actorId: 'user',
+      action: parsed.data.status ? 'decision.status_changed' : 'decision.updated',
+      entityType: 'decision',
+      entityId: updated.id,
+      detailJson: parsed.data.status ? { from: existing.status, to: updated.status } : { fields: Object.keys(parsed.data) },
+    });
+    return json(updated);
+  }
+
+  private deprecateDecision(id: string): Response {
+    const existing = this.getDecision(id);
+    if (!existing) return json({ error: 'Decision not found' }, 404);
+    if (existing.status !== 'accepted') return json({ error: 'Only accepted decisions can be deprecated' }, 422);
+    const updated = this.updateDecision(id, { status: 'deprecated' });
+    if (!updated) return json({ error: 'Decision not found' }, 404);
+    this.appendAuditLog({
+      actorType: 'human',
+      actorId: 'user',
+      action: 'decision.status_changed',
+      entityType: 'decision',
+      entityId: updated.id,
+      detailJson: { from: existing.status, to: updated.status },
+    });
+    return json(updated);
+  }
+
+  private supersedeDecision(id: string, body: unknown): Response {
+    const parsed = DecisionTransitionRequestSchema.safeParse(body);
+    if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
+    if (!parsed.data.supersededBy) return json({ error: 'supersededBy is required' }, 400);
+    const existing = this.getDecision(id);
+    if (!existing) return json({ error: 'Decision not found' }, 404);
+    if (existing.status !== 'accepted') return json({ error: 'Only accepted decisions can be superseded' }, 422);
+    const replacement = this.getDecision(parsed.data.supersededBy);
+    if (!replacement) return json({ error: 'Superseding decision not found' }, 404);
+    const updated = this.updateDecision(id, { status: 'superseded', supersededBy: replacement.id });
+    if (!updated) return json({ error: 'Decision not found' }, 404);
+    this.appendAuditLog({
+      actorType: 'human',
+      actorId: 'user',
+      action: 'decision.status_changed',
+      entityType: 'decision',
+      entityId: updated.id,
+      detailJson: { from: existing.status, to: updated.status, supersededBy: replacement.id },
+    });
+    return json(updated);
+  }
+
+  private createDocument(body: unknown): Response {
+    const parsed = CreateDocumentRequestSchema.safeParse(body);
+    if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
+    if (!this.getChannel(parsed.data.sourceChannelId)) return json({ error: 'Channel not found' }, 404);
+    const document = this.writeDocument({
+      id: crypto.randomUUID(),
+      kind: parsed.data.kind,
+      title: parsed.data.title,
+      status: 'draft',
+      content: parsed.data.content,
+      sourceThreadId: parsed.data.sourceThreadId,
+      sourceChannelId: parsed.data.sourceChannelId,
+      author: { actorType: parsed.data.authorType, actorId: parsed.data.authorId },
+      authorName: parsed.data.authorName,
+      reviewers: [],
+      relatedDecisions: parsed.data.relatedDecisions,
+      relatedTasks: parsed.data.relatedTasks,
+    });
+    this.appendAuditLog({
+      actorType: parsed.data.authorType,
+      actorId: parsed.data.authorId,
+      action: 'document.created',
+      entityType: 'document',
+      entityId: document.id,
+      detailJson: { kind: document.kind, status: document.status, sourceChannelId: document.sourceChannelId },
+    });
+    return json(document, 201);
+  }
+
+  private patchDocument(id: string, body: unknown): Response {
+    const parsed = PatchDocumentRequestSchema.safeParse(body);
+    if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
+    const existing = this.getDocument(id);
+    if (!existing) return json({ error: 'Document not found' }, 404);
+    const updated = this.updateDocument(id, parsed.data);
+    if (!updated) return json({ error: 'Document not found' }, 404);
+    this.appendAuditLog({
+      actorType: 'human',
+      actorId: 'user',
+      action: 'document.updated',
+      entityType: 'document',
+      entityId: updated.id,
+      detailJson: { fields: Object.keys(parsed.data) },
+    });
+    return json(updated);
+  }
+
+  private submitDocumentReview(id: string, body: unknown): Response {
+    const parsed = SubmitDocumentReviewRequestSchema.safeParse(body);
+    if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
+    const existing = this.getDocument(id);
+    if (!existing) return json({ error: 'Document not found' }, 404);
+    if (existing.status !== 'draft') return json({ error: 'Only draft documents can be submitted for review' }, 422);
+    const updated = this.updateDocument(id, { status: 'in_review', reviewers: parsed.data.reviewers });
+    if (!updated) return json({ error: 'Document not found' }, 404);
+    this.appendAuditLog({
+      actorType: 'human',
+      actorId: 'user',
+      action: 'document.status_changed',
+      entityType: 'document',
+      entityId: updated.id,
+      detailJson: { from: existing.status, to: updated.status },
+    });
+    return json(updated);
+  }
+
+  private approveDocument(id: string, body: unknown): Response {
+    const parsed = ApproveDocumentRequestSchema.safeParse(body);
+    if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
+    const existing = this.getDocument(id);
+    if (!existing) return json({ error: 'Document not found' }, 404);
+    if (existing.status !== 'in_review') return json({ error: 'Only in_review documents can be approved' }, 422);
+    const allowed = (existing.reviewers ?? []).some((reviewer) => reviewer.actorType === parsed.data.actorType && reviewer.actorId === parsed.data.actorId);
+    if (!allowed) return json({ error: 'Approver must be in reviewers list' }, 403);
+    const updated = this.updateDocument(id, { status: 'approved', approvedAt: new Date().toISOString() });
+    if (!updated) return json({ error: 'Document not found' }, 404);
+    this.appendAuditLog({
+      actorType: parsed.data.actorType,
+      actorId: parsed.data.actorId,
+      action: 'document.status_changed',
+      entityType: 'document',
+      entityId: updated.id,
+      detailJson: { from: existing.status, to: updated.status },
+    });
+    return json(updated);
+  }
+
+  private deprecateDocument(id: string): Response {
+    const existing = this.getDocument(id);
+    if (!existing) return json({ error: 'Document not found' }, 404);
+    if (existing.status !== 'approved') return json({ error: 'Only approved documents can be deprecated' }, 422);
+    const updated = this.updateDocument(id, { status: 'deprecated' });
+    if (!updated) return json({ error: 'Document not found' }, 404);
+    this.appendAuditLog({
+      actorType: 'human',
+      actorId: 'user',
+      action: 'document.status_changed',
+      entityType: 'document',
+      entityId: updated.id,
+      detailJson: { from: existing.status, to: updated.status },
+    });
+    return json(updated);
+  }
+
+  private supersedeDocument(id: string, body: unknown): Response {
+    const parsed = DecisionTransitionRequestSchema.safeParse(body);
+    if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
+    if (!parsed.data.supersededBy) return json({ error: 'supersededBy is required' }, 400);
+    const existing = this.getDocument(id);
+    if (!existing) return json({ error: 'Document not found' }, 404);
+    if (existing.status !== 'approved') return json({ error: 'Only approved documents can be superseded' }, 422);
+    const replacement = this.getDocument(parsed.data.supersededBy);
+    if (!replacement) return json({ error: 'Superseding document not found' }, 404);
+    const updated = this.updateDocument(id, { status: 'superseded', supersededBy: replacement.id });
+    if (!updated) return json({ error: 'Document not found' }, 404);
+    this.appendAuditLog({
+      actorType: 'human',
+      actorId: 'user',
+      action: 'document.status_changed',
+      entityType: 'document',
+      entityId: updated.id,
+      detailJson: { from: existing.status, to: updated.status, supersededBy: replacement.id },
+    });
+    return json(updated);
+  }
+
   private patchTask(taskId: string, body: unknown): Response {
     const parsed = PatchTaskRequestSchema.safeParse(body);
     if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
@@ -1316,6 +1691,67 @@ export class CrewdenHub extends DurableObject<Env> {
     this.broadcast({ type: 'task:update', task });
     this.notifyTaskAssignee(task);
     return json(task, 201);
+  }
+
+  private createDecisionFromMessage(messageId: string, body: unknown): Response {
+    const message = this.getMessage(messageId);
+    if (!message) return json({ error: 'Message not found' }, 404);
+    const payload = (body ?? {}) as Record<string, unknown>;
+    const decision = this.writeDecision({
+      id: crypto.randomUUID(),
+      channelId: message.channelId,
+      sourceThreadId: message.threadRootId ?? message.id,
+      title: typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim() : message.content.slice(0, 120),
+      status: 'proposed',
+      problem: typeof payload.problem === 'string' && payload.problem.trim() ? payload.problem.trim() : message.content.slice(0, 500),
+      decisionText: typeof payload.decisionText === 'string' && payload.decisionText.trim() ? payload.decisionText.trim() : message.content.slice(0, 500),
+      alternatives: Array.isArray(payload.alternatives) ? payload.alternatives.filter((item): item is string => typeof item === 'string') : [],
+      rationale: typeof payload.rationale === 'string' ? payload.rationale : undefined,
+      consequences: Array.isArray(payload.consequences) ? payload.consequences.filter((item): item is string => typeof item === 'string') : [],
+      participants: [],
+      relatedDecisions: [],
+    });
+    this.appendAuditLog({
+      actorType: 'human',
+      actorId: 'user',
+      action: 'decision.created',
+      entityType: 'decision',
+      entityId: decision.id,
+      detailJson: { sourceThreadId: decision.sourceThreadId },
+    });
+    return json(decision, 201);
+  }
+
+  private createDocumentFromMessage(messageId: string, body: unknown): Response {
+    const message = this.getMessage(messageId);
+    if (!message) return json({ error: 'Message not found' }, 404);
+    const payload = (body ?? {}) as Record<string, unknown>;
+    const kind = typeof payload.kind === 'string' ? payload.kind : 'adr';
+    const parsedKind = DocumentKindSchema.safeParse(kind);
+    if (!parsedKind.success) return json({ error: 'Invalid document kind' }, 400);
+    const document = this.writeDocument({
+      id: crypto.randomUUID(),
+      kind: parsedKind.data,
+      title: typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim() : message.content.slice(0, 120),
+      status: 'draft',
+      content: typeof payload.content === 'string' ? payload.content : message.content,
+      sourceThreadId: message.threadRootId ?? message.id,
+      sourceChannelId: message.channelId,
+      author: { actorType: 'human', actorId: 'user' },
+      authorName: 'user',
+      reviewers: [],
+      relatedDecisions: Array.isArray(payload.relatedDecisions) ? payload.relatedDecisions.filter((item): item is string => typeof item === 'string') : [],
+      relatedTasks: Array.isArray(payload.relatedTasks) ? payload.relatedTasks.filter((item): item is string => typeof item === 'string') : [],
+    });
+    this.appendAuditLog({
+      actorType: 'human',
+      actorId: 'user',
+      action: 'document.created',
+      entityType: 'document',
+      entityId: document.id,
+      detailJson: { sourceThreadId: document.sourceThreadId, kind: document.kind },
+    });
+    return json(document, 201);
   }
 
   private createGoalFromMessage(messageId: string, body: unknown): Response {
@@ -2252,6 +2688,8 @@ export class CrewdenHub extends DurableObject<Env> {
     this.ctx.storage.sql.exec('DELETE FROM goals WHERE channel_id = ?', id);
     this.ctx.storage.sql.exec('DELETE FROM goal_alignments WHERE channel_id = ?', id);
     this.ctx.storage.sql.exec('DELETE FROM reminders WHERE channel_id = ?', id);
+    this.ctx.storage.sql.exec('DELETE FROM decisions WHERE channel_id = ?', id);
+    this.ctx.storage.sql.exec('DELETE FROM documents WHERE source_channel_id = ?', id);
     this.ctx.storage.sql.exec('DELETE FROM channels WHERE id = ?', id);
   }
 
@@ -2271,7 +2709,7 @@ export class CrewdenHub extends DurableObject<Env> {
     return all.filter((message) => !message.threadRootId).map((message) => this.withThreadSummary(message, all));
   }
 
-  private getThread(messageId: string): { root: Message; replies: Message[] } | undefined {
+  private getThread(messageId: string): { root: Message; replies: Message[]; linkedDecisions?: Decision[]; linkedDocuments?: Document[] } | undefined {
     const message = this.getMessage(messageId);
     if (!message) return undefined;
     const rootId = message.threadRootId ?? message.id;
@@ -2282,7 +2720,15 @@ export class CrewdenHub extends DurableObject<Env> {
       .exec<Row>('SELECT * FROM messages WHERE thread_root_id = ? ORDER BY created_at', root.id)
       .toArray()
       .map(toMessage);
-    return { root: this.withThreadSummary(root, [root, ...replies]), replies };
+    const linkedDecisions = this.ctx.storage.sql
+      .exec<Row>('SELECT * FROM decisions WHERE source_thread_id = ? ORDER BY updated_at DESC', root.id)
+      .toArray()
+      .map(toDecision);
+    const linkedDocuments = this.ctx.storage.sql
+      .exec<Row>('SELECT * FROM documents WHERE source_thread_id = ? ORDER BY updated_at DESC', root.id)
+      .toArray()
+      .map(toDocument);
+    return { root: this.withThreadSummary(root, [root, ...replies]), replies, linkedDecisions, linkedDocuments };
   }
 
   private withThreadSummary(message: Message, channelMessages?: Message[]): Message {
@@ -2472,6 +2918,35 @@ export class CrewdenHub extends DurableObject<Env> {
   private getKnowledgeEntry(id: string): KnowledgeEntry | undefined {
     const row = this.ctx.storage.sql.exec<Row>('SELECT * FROM knowledge_entries WHERE id = ? LIMIT 1', id).toArray()[0];
     return row ? toKnowledgeEntry(row) : undefined;
+  }
+
+  private listDecisions(filter: { channelId?: string; status?: DecisionStatus } = {}): Decision[] {
+    return this.ctx.storage.sql.exec<Row>('SELECT * FROM decisions ORDER BY updated_at DESC').toArray()
+      .map(toDecision)
+      .filter((decision) =>
+        (!filter.channelId || decision.channelId === filter.channelId) &&
+        (!filter.status || decision.status === filter.status)
+      );
+  }
+
+  private getDecision(id: string): Decision | undefined {
+    const row = this.ctx.storage.sql.exec<Row>('SELECT * FROM decisions WHERE id = ? LIMIT 1', id).toArray()[0];
+    return row ? toDecision(row) : undefined;
+  }
+
+  private listDocuments(filter: { sourceChannelId?: string; kind?: DocumentKind; status?: DocumentStatus } = {}): Document[] {
+    return this.ctx.storage.sql.exec<Row>('SELECT * FROM documents ORDER BY updated_at DESC').toArray()
+      .map(toDocument)
+      .filter((document) =>
+        (!filter.sourceChannelId || document.sourceChannelId === filter.sourceChannelId) &&
+        (!filter.kind || document.kind === filter.kind) &&
+        (!filter.status || document.status === filter.status)
+      );
+  }
+
+  private getDocument(id: string): Document | undefined {
+    const row = this.ctx.storage.sql.exec<Row>('SELECT * FROM documents WHERE id = ? LIMIT 1', id).toArray()[0];
+    return row ? toDocument(row) : undefined;
   }
 
   private createMessage(message: NewMessage): Message {
@@ -2671,6 +3146,59 @@ export class CrewdenHub extends DurableObject<Env> {
     return created;
   }
 
+  private writeDecision(input: Omit<Decision, 'createdAt' | 'updatedAt'>): Decision {
+    const now = new Date().toISOString();
+    const created: Decision = { ...input, createdAt: now, updatedAt: now };
+    this.ctx.storage.sql.exec(
+      `INSERT INTO decisions (id, channel_id, source_thread_id, title, status, problem, alternatives, decision_text, rationale, consequences, participants, related_decisions, superseded_by, accepted_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      created.id,
+      created.channelId,
+      created.sourceThreadId ?? null,
+      created.title,
+      created.status,
+      created.problem,
+      created.alternatives ? JSON.stringify(created.alternatives) : null,
+      created.decisionText,
+      created.rationale ?? null,
+      created.consequences ? JSON.stringify(created.consequences) : null,
+      created.participants ? JSON.stringify(created.participants) : null,
+      created.relatedDecisions ? JSON.stringify(created.relatedDecisions) : null,
+      created.supersededBy ?? null,
+      created.acceptedAt ?? null,
+      created.createdAt,
+      created.updatedAt,
+    );
+    return created;
+  }
+
+  private writeDocument(input: Omit<Document, 'createdAt' | 'updatedAt'>): Document {
+    const now = new Date().toISOString();
+    const created: Document = { ...input, createdAt: now, updatedAt: now };
+    this.ctx.storage.sql.exec(
+      `INSERT INTO documents (id, kind, title, status, content, source_thread_id, source_channel_id, author_type, author_id, author_name, reviewers, related_decisions, related_tasks, superseded_by, approved_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      created.id,
+      created.kind,
+      created.title,
+      created.status,
+      created.content,
+      created.sourceThreadId ?? null,
+      created.sourceChannelId,
+      created.author.actorType,
+      created.author.actorId,
+      created.authorName,
+      created.reviewers ? JSON.stringify(created.reviewers) : null,
+      created.relatedDecisions ? JSON.stringify(created.relatedDecisions) : null,
+      created.relatedTasks ? JSON.stringify(created.relatedTasks) : null,
+      created.supersededBy ?? null,
+      created.approvedAt ?? null,
+      created.createdAt,
+      created.updatedAt,
+    );
+    return created;
+  }
+
   private updateReminder(id: string, patch: Partial<Pick<Reminder, 'status'>>): Reminder | undefined {
     const existing = this.getReminder(id);
     if (!existing) return undefined;
@@ -2696,6 +3224,63 @@ export class CrewdenHub extends DurableObject<Env> {
       updated.ownerAgentId ?? null,
       updated.reviewerAgentId ?? null,
       updated.status,
+      updated.updatedAt,
+      id,
+    );
+    return updated;
+  }
+
+  private updateDecision(id: string, patch: Partial<Omit<Decision, 'id' | 'createdAt'>>): Decision | undefined {
+    const existing = this.getDecision(id);
+    if (!existing) return undefined;
+    const updated: Decision = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    this.ctx.storage.sql.exec(
+      `UPDATE decisions
+       SET channel_id = ?, source_thread_id = ?, title = ?, status = ?, problem = ?, alternatives = ?, decision_text = ?, rationale = ?, consequences = ?, participants = ?, related_decisions = ?, superseded_by = ?, accepted_at = ?, created_at = ?, updated_at = ?
+       WHERE id = ?`,
+      updated.channelId,
+      updated.sourceThreadId ?? null,
+      updated.title,
+      updated.status,
+      updated.problem,
+      updated.alternatives ? JSON.stringify(updated.alternatives) : null,
+      updated.decisionText,
+      updated.rationale ?? null,
+      updated.consequences ? JSON.stringify(updated.consequences) : null,
+      updated.participants ? JSON.stringify(updated.participants) : null,
+      updated.relatedDecisions ? JSON.stringify(updated.relatedDecisions) : null,
+      updated.supersededBy ?? null,
+      updated.acceptedAt ?? null,
+      updated.createdAt,
+      updated.updatedAt,
+      id,
+    );
+    return updated;
+  }
+
+  private updateDocument(id: string, patch: Partial<Omit<Document, 'id' | 'createdAt'>>): Document | undefined {
+    const existing = this.getDocument(id);
+    if (!existing) return undefined;
+    const updated: Document = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    this.ctx.storage.sql.exec(
+      `UPDATE documents
+       SET kind = ?, title = ?, status = ?, content = ?, source_thread_id = ?, source_channel_id = ?, author_type = ?, author_id = ?, author_name = ?, reviewers = ?, related_decisions = ?, related_tasks = ?, superseded_by = ?, approved_at = ?, created_at = ?, updated_at = ?
+       WHERE id = ?`,
+      updated.kind,
+      updated.title,
+      updated.status,
+      updated.content,
+      updated.sourceThreadId ?? null,
+      updated.sourceChannelId,
+      updated.author.actorType,
+      updated.author.actorId,
+      updated.authorName,
+      updated.reviewers ? JSON.stringify(updated.reviewers) : null,
+      updated.relatedDecisions ? JSON.stringify(updated.relatedDecisions) : null,
+      updated.relatedTasks ? JSON.stringify(updated.relatedTasks) : null,
+      updated.supersededBy ?? null,
+      updated.approvedAt ?? null,
+      updated.createdAt,
       updated.updatedAt,
       id,
     );
@@ -3711,6 +4296,53 @@ function toKnowledgeEntry(row: Row): KnowledgeEntry {
     ownerAgentId: row.owner_agent_id ? String(row.owner_agent_id) : undefined,
     reviewerAgentId: row.reviewer_agent_id ? String(row.reviewer_agent_id) : undefined,
     status: String(row.status) as KnowledgeStatus,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toDecision(row: Row): Decision {
+  const status = String(row.status);
+  return {
+    id: String(row.id),
+    channelId: String(row.channel_id),
+    sourceThreadId: row.source_thread_id ? String(row.source_thread_id) : undefined,
+    title: String(row.title),
+    status: (status === 'accepted' || status === 'deprecated' || status === 'superseded' ? status : 'proposed') as DecisionStatus,
+    problem: String(row.problem),
+    alternatives: parseStringArray(row.alternatives),
+    decisionText: String(row.decision_text),
+    rationale: row.rationale ? String(row.rationale) : undefined,
+    consequences: parseStringArray(row.consequences),
+    participants: row.participants ? JSON.parse(String(row.participants)) as Decision['participants'] : undefined,
+    relatedDecisions: parseStringArray(row.related_decisions),
+    supersededBy: row.superseded_by ? String(row.superseded_by) : undefined,
+    acceptedAt: row.accepted_at ? String(row.accepted_at) : undefined,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toDocument(row: Row): Document {
+  const status = String(row.status);
+  return {
+    id: String(row.id),
+    kind: String(row.kind) as DocumentKind,
+    title: String(row.title),
+    status: (status === 'in_review' || status === 'approved' || status === 'deprecated' || status === 'superseded' ? status : 'draft') as DocumentStatus,
+    content: String(row.content),
+    sourceThreadId: row.source_thread_id ? String(row.source_thread_id) : undefined,
+    sourceChannelId: String(row.source_channel_id),
+    author: {
+      actorType: String(row.author_type) as ActorType,
+      actorId: String(row.author_id),
+    },
+    authorName: String(row.author_name),
+    reviewers: row.reviewers ? JSON.parse(String(row.reviewers)) as Document['reviewers'] : undefined,
+    relatedDecisions: parseStringArray(row.related_decisions),
+    relatedTasks: parseStringArray(row.related_tasks),
+    supersededBy: row.superseded_by ? String(row.superseded_by) : undefined,
+    approvedAt: row.approved_at ? String(row.approved_at) : undefined,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

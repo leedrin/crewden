@@ -5,9 +5,9 @@ import { nanoid } from 'nanoid';
 import { drizzle, type LibSQLDatabase } from 'drizzle-orm/libsql';
 import { createClient, type Client } from '@libsql/client';
 import { asc, desc, eq, inArray, or } from 'drizzle-orm';
-import type { ActorType, Channel, Message, MessageThread, Machine, Agent, RuntimeId, AgentStatus, AgentActivity, DirectMessage, DirectMessageThread, AgentDelegation, AgentTokenInfo, Task, TaskStatus, GoalBrief, GoalBriefStatus, GoalAlignment, GoalAlignmentStatus, Reminder, ReminderStatus, SearchMessageResult, KnowledgeEntry, KnowledgeKind, KnowledgeSearchResult, KnowledgeStatus, AgentPermissions, AgentCapability, AgentRole } from '@crewden/shared';
+import type { ActorType, Channel, Message, MessageThread, Machine, Agent, RuntimeId, AgentStatus, AgentActivity, DirectMessage, DirectMessageThread, AgentDelegation, AgentTokenInfo, Task, TaskStatus, GoalBrief, GoalBriefStatus, GoalAlignment, GoalAlignmentStatus, Reminder, ReminderStatus, SearchMessageResult, KnowledgeEntry, KnowledgeKind, KnowledgeSearchResult, KnowledgeStatus, AgentPermissions, AgentCapability, AgentRole, Decision, DecisionStatus, Document, DocumentStatus, DocumentKind } from '@crewden/shared';
 import { resolveAgentReference, resolveAgents } from '@crewden/hub-core';
-import { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, directMessages, goalAlignments, goals, knowledgeEntries, machines, messages, reminders, tasks } from './schema.js';
+import { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, decisions, directMessages, documents, goalAlignments, goals, knowledgeEntries, machines, messages, reminders, tasks } from './schema.js';
 
 type Database = LibSQLDatabase<typeof import('./schema.js')>;
 type NewMessage = Omit<Message, 'createdAt' | 'actorType' | 'actorId'> & Partial<Pick<Message, 'actorType' | 'actorId'>>;
@@ -51,7 +51,7 @@ async function ensureDbDirectory(path: string): Promise<void> {
 function createDatabase(): Database {
   const path = getDbPath();
   client = createClient({ url: getDbUrl(path) });
-  db = drizzle(client, { schema: { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, directMessages, goalAlignments, goals, knowledgeEntries, machines, messages, reminders, tasks } });
+  db = drizzle(client, { schema: { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, decisions, directMessages, documents, goalAlignments, goals, knowledgeEntries, machines, messages, reminders, tasks } });
   return db;
 }
 
@@ -241,6 +241,52 @@ export async function initDb(): Promise<void> {
         updated_at TEXT NOT NULL
       )
     `);
+    await database.run(`
+      CREATE TABLE IF NOT EXISTS decisions (
+        id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        source_thread_id TEXT,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'proposed',
+        problem TEXT NOT NULL,
+        alternatives TEXT,
+        decision_text TEXT NOT NULL,
+        rationale TEXT,
+        consequences TEXT,
+        participants TEXT,
+        related_decisions TEXT,
+        superseded_by TEXT,
+        accepted_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_decisions_channel ON decisions(channel_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_decisions_status ON decisions(status)`);
+    await database.run(`
+      CREATE TABLE IF NOT EXISTS documents (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        content TEXT NOT NULL DEFAULT '',
+        source_thread_id TEXT,
+        source_channel_id TEXT NOT NULL,
+        author_type TEXT NOT NULL,
+        author_id TEXT NOT NULL,
+        author_name TEXT NOT NULL,
+        reviewers TEXT,
+        related_decisions TEXT,
+        related_tasks TEXT,
+        superseded_by TEXT,
+        approved_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_documents_channel ON documents(source_channel_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_documents_kind ON documents(kind)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status)`);
     await database.run(`ALTER TABLE tasks ADD COLUMN context TEXT`).catch(() => undefined);
     await database.run(`ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1`).catch(() => undefined);
     await database.run(`ALTER TABLE tasks ADD COLUMN type TEXT NOT NULL DEFAULT 'feature'`).catch(() => undefined);
@@ -618,6 +664,61 @@ function toKnowledgeEntry(row: typeof knowledgeEntries.$inferSelect): KnowledgeE
   };
 }
 
+function normalizeDecisionStatus(status: string): DecisionStatus {
+  if (status === 'accepted' || status === 'deprecated' || status === 'superseded') return status;
+  return 'proposed';
+}
+
+function toDecision(row: typeof decisions.$inferSelect): Decision {
+  return {
+    id: row.id,
+    channelId: row.channelId,
+    sourceThreadId: row.sourceThreadId ?? undefined,
+    title: row.title,
+    status: normalizeDecisionStatus(row.status),
+    problem: row.problem,
+    alternatives: parseStringArray(row.alternatives),
+    decisionText: row.decisionText,
+    rationale: row.rationale ?? undefined,
+    consequences: parseStringArray(row.consequences),
+    participants: row.participants ? JSON.parse(row.participants) as Decision['participants'] : undefined,
+    relatedDecisions: parseStringArray(row.relatedDecisions),
+    supersededBy: row.supersededBy ?? undefined,
+    acceptedAt: row.acceptedAt ?? undefined,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function normalizeDocumentStatus(status: string): DocumentStatus {
+  if (status === 'in_review' || status === 'approved' || status === 'deprecated' || status === 'superseded') return status;
+  return 'draft';
+}
+
+function toDocument(row: typeof documents.$inferSelect): Document {
+  return {
+    id: row.id,
+    kind: row.kind as DocumentKind,
+    title: row.title,
+    status: normalizeDocumentStatus(row.status),
+    content: row.content,
+    sourceThreadId: row.sourceThreadId ?? undefined,
+    sourceChannelId: row.sourceChannelId,
+    author: {
+      actorType: row.authorType as ActorType,
+      actorId: row.authorId,
+    },
+    authorName: row.authorName,
+    reviewers: row.reviewers ? JSON.parse(row.reviewers) as Document['reviewers'] : undefined,
+    relatedDecisions: parseStringArray(row.relatedDecisions),
+    relatedTasks: parseStringArray(row.relatedTasks),
+    supersededBy: row.supersededBy ?? undefined,
+    approvedAt: row.approvedAt ?? undefined,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 function scoreKnowledge(entry: KnowledgeEntry, query: string): number {
   if (!query) return 1;
   let score = 0;
@@ -730,6 +831,8 @@ export class SqliteStore {
     await getDb().delete(goals).where(eq(goals.channelId, id));
     await getDb().delete(goalAlignments).where(eq(goalAlignments.channelId, id));
     await getDb().delete(reminders).where(eq(reminders.channelId, id));
+    await getDb().delete(decisions).where(eq(decisions.channelId, id));
+    await getDb().delete(documents).where(eq(documents.sourceChannelId, id));
     await getDb().delete(channels).where(eq(channels.id, id));
     return true;
   }
@@ -858,7 +961,14 @@ export class SqliteStore {
       .where(eq(messages.threadRootId, actualRoot.id))
       .orderBy(asc(messages.createdAt));
     const replies = replyRows.map(toMessage);
-    return { root: withThreadSummary(actualRoot, [actualRoot, ...replies]), replies };
+    const linkedDecisions = (await getDb().select().from(decisions).where(eq(decisions.sourceThreadId, actualRoot.id))).map(toDecision);
+    const linkedDocuments = (await getDb().select().from(documents).where(eq(documents.sourceThreadId, actualRoot.id))).map(toDocument);
+    return {
+      root: withThreadSummary(actualRoot, [actualRoot, ...replies]),
+      replies,
+      linkedDecisions,
+      linkedDocuments,
+    };
   }
 
   async createDirectMessage(dm: Omit<DirectMessage, 'createdAt'>): Promise<DirectMessage> {
@@ -1246,6 +1356,125 @@ export class SqliteStore {
     return updated;
   }
 
+  async listDecisions(filter: { channelId?: string; status?: DecisionStatus } = {}): Promise<Decision[]> {
+    await initDb();
+    const rows = await getDb().select().from(decisions).orderBy(desc(decisions.updatedAt));
+    return rows
+      .map(toDecision)
+      .filter((decision) => (!filter.channelId || decision.channelId === filter.channelId) && (!filter.status || decision.status === filter.status));
+  }
+
+  async getDecision(id: string): Promise<Decision | undefined> {
+    await initDb();
+    const [row] = await getDb().select().from(decisions).where(eq(decisions.id, id)).limit(1);
+    return row ? toDecision(row) : undefined;
+  }
+
+  async createDecision(input: Omit<Decision, 'createdAt' | 'updatedAt'>): Promise<Decision> {
+    await initDb();
+    const now = new Date().toISOString();
+    const created: Decision = { ...input, createdAt: now, updatedAt: now };
+    await getDb().insert(decisions).values({
+      ...created,
+      sourceThreadId: created.sourceThreadId ?? null,
+      alternatives: created.alternatives ? JSON.stringify(created.alternatives) : null,
+      rationale: created.rationale ?? null,
+      consequences: created.consequences ? JSON.stringify(created.consequences) : null,
+      participants: created.participants ? JSON.stringify(created.participants) : null,
+      relatedDecisions: created.relatedDecisions ? JSON.stringify(created.relatedDecisions) : null,
+      supersededBy: created.supersededBy ?? null,
+      acceptedAt: created.acceptedAt ?? null,
+    });
+    return created;
+  }
+
+  async updateDecision(id: string, patch: Partial<Omit<Decision, 'id' | 'createdAt'>>): Promise<Decision | undefined> {
+    await initDb();
+    const existing = await this.getDecision(id);
+    if (!existing) return undefined;
+    const updated: Decision = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    await getDb().update(decisions).set({
+      channelId: updated.channelId,
+      sourceThreadId: updated.sourceThreadId ?? null,
+      title: updated.title,
+      status: updated.status,
+      problem: updated.problem,
+      alternatives: updated.alternatives ? JSON.stringify(updated.alternatives) : null,
+      decisionText: updated.decisionText,
+      rationale: updated.rationale ?? null,
+      consequences: updated.consequences ? JSON.stringify(updated.consequences) : null,
+      participants: updated.participants ? JSON.stringify(updated.participants) : null,
+      relatedDecisions: updated.relatedDecisions ? JSON.stringify(updated.relatedDecisions) : null,
+      supersededBy: updated.supersededBy ?? null,
+      acceptedAt: updated.acceptedAt ?? null,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    }).where(eq(decisions.id, id));
+    return updated;
+  }
+
+  async listDocuments(filter: { sourceChannelId?: string; kind?: DocumentKind; status?: DocumentStatus } = {}): Promise<Document[]> {
+    await initDb();
+    const rows = await getDb().select().from(documents).orderBy(desc(documents.updatedAt));
+    return rows
+      .map(toDocument)
+      .filter((document) =>
+        (!filter.sourceChannelId || document.sourceChannelId === filter.sourceChannelId) &&
+        (!filter.kind || document.kind === filter.kind) &&
+        (!filter.status || document.status === filter.status)
+      );
+  }
+
+  async getDocument(id: string): Promise<Document | undefined> {
+    await initDb();
+    const [row] = await getDb().select().from(documents).where(eq(documents.id, id)).limit(1);
+    return row ? toDocument(row) : undefined;
+  }
+
+  async createDocument(input: Omit<Document, 'createdAt' | 'updatedAt'>): Promise<Document> {
+    await initDb();
+    const now = new Date().toISOString();
+    const created: Document = { ...input, createdAt: now, updatedAt: now };
+    await getDb().insert(documents).values({
+      ...created,
+      sourceThreadId: created.sourceThreadId ?? null,
+      authorType: created.author.actorType,
+      authorId: created.author.actorId,
+      reviewers: created.reviewers ? JSON.stringify(created.reviewers) : null,
+      relatedDecisions: created.relatedDecisions ? JSON.stringify(created.relatedDecisions) : null,
+      relatedTasks: created.relatedTasks ? JSON.stringify(created.relatedTasks) : null,
+      supersededBy: created.supersededBy ?? null,
+      approvedAt: created.approvedAt ?? null,
+    });
+    return created;
+  }
+
+  async updateDocument(id: string, patch: Partial<Omit<Document, 'id' | 'createdAt'>>): Promise<Document | undefined> {
+    await initDb();
+    const existing = await this.getDocument(id);
+    if (!existing) return undefined;
+    const updated: Document = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    await getDb().update(documents).set({
+      kind: updated.kind,
+      title: updated.title,
+      status: updated.status,
+      content: updated.content,
+      sourceThreadId: updated.sourceThreadId ?? null,
+      sourceChannelId: updated.sourceChannelId,
+      authorType: updated.author.actorType,
+      authorId: updated.author.actorId,
+      authorName: updated.authorName,
+      reviewers: updated.reviewers ? JSON.stringify(updated.reviewers) : null,
+      relatedDecisions: updated.relatedDecisions ? JSON.stringify(updated.relatedDecisions) : null,
+      relatedTasks: updated.relatedTasks ? JSON.stringify(updated.relatedTasks) : null,
+      supersededBy: updated.supersededBy ?? null,
+      approvedAt: updated.approvedAt ?? null,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    }).where(eq(documents.id, id));
+    return updated;
+  }
+
   async listDirectMessages(agentId: string, otherId: string): Promise<DirectMessage[]> {
     await initDb();
     const rows = await getDb()
@@ -1527,6 +1756,8 @@ export async function resetStore(): Promise<void> {
   await database.delete(goalAlignments);
   await database.delete(reminders);
   await database.delete(knowledgeEntries);
+  await database.delete(decisions);
+  await database.delete(documents);
   await database.delete(agentPermissions);
   await database.delete(agents);
   await database.delete(machines);

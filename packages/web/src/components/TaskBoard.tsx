@@ -246,6 +246,17 @@ function TaskCard({ task, agents, channels, onStatus, onDelete, compact = false 
           </ul>
         </div>
       ) : null}
+      {(task.context?.relatedDecisionIds?.length || task.context?.relatedDocumentIds?.length) ? (
+        <div style={{ marginTop: 8, border: '1.5px dashed #334155', padding: 7, fontSize: 11, lineHeight: 1.35, background: '#f8fafc' }}>
+          <strong>REFERENCES</strong>
+          {task.context?.relatedDecisionIds?.length ? (
+            <div>Decisions: {task.context.relatedDecisionIds.join(', ')}</div>
+          ) : null}
+          {task.context?.relatedDocumentIds?.length ? (
+            <div>Documents: {task.context.relatedDocumentIds.join(', ')}</div>
+          ) : null}
+        </div>
+      ) : null}
       {latestReview || task.context?.evidence?.length || task.context?.acceptanceChecklist?.length ? (
         <div style={{ marginTop: 8, border: '2px solid #000', background: latestReview?.status === 'approved' ? '#dcfce7' : '#e0f2fe', padding: 7, fontSize: 11, lineHeight: 1.35 }}>
           <strong>{latestReview?.status === 'approved' ? 'ACCEPTED' : 'REVIEW'}</strong>

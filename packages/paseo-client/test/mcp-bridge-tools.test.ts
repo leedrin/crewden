@@ -6,15 +6,19 @@ describe("mcp-bridge tools", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers 25 crewden tools", () => {
+  it("registers 29 crewden tools", () => {
     const tools = createToolDefinitions();
-    expect(tools).toHaveLength(25);
+    expect(tools).toHaveLength(29);
     expect(tools.map((tool) => tool.name)).toContain("crewden_send_message");
     expect(tools.map((tool) => tool.name)).toContain("crewden_create_task");
     expect(tools.map((tool) => tool.name)).toContain("crewden_block_task");
     expect(tools.map((tool) => tool.name)).toContain("crewden_invite_agent");
     expect(tools.map((tool) => tool.name)).toContain("crewden_agent_profile");
     expect(tools.map((tool) => tool.name)).toContain("crewden_resolve_agents");
+    expect(tools.map((tool) => tool.name)).toContain("crewden_list_decisions");
+    expect(tools.map((tool) => tool.name)).toContain("crewden_create_decision");
+    expect(tools.map((tool) => tool.name)).toContain("crewden_list_documents");
+    expect(tools.map((tool) => tool.name)).toContain("crewden_create_document");
     expect(tools.map((tool) => tool.name)).toContain("crewden_set_reminder");
     expect(tools.map((tool) => tool.name)).toContain("crewden_search_knowledge");
   });

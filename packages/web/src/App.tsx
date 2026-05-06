@@ -644,6 +644,8 @@ export function App() {
         <ThreadPanel
           root={thread.root}
           replies={thread.replies}
+          linkedDecisions={thread.linkedDecisions}
+          linkedDocuments={thread.linkedDocuments}
           agents={agents}
           activitiesByAgent={activitiesByAgent}
           targetMessageId={threadTargetMessageId}

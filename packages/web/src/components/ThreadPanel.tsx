@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { Agent, AgentActivity, Message } from '../api.js';
+import type { Agent, AgentActivity, Decision, Document, Message } from '../api.js';
 import { MessageContent } from './MessageContent.js';
 import { PresenceAvatar } from './PresenceAvatar.js';
 import { Composer } from './Composer.js';
@@ -8,6 +8,8 @@ import { t } from '../i18n.js';
 type Props = {
   root: Message;
   replies: Message[];
+  linkedDecisions?: Decision[];
+  linkedDocuments?: Document[];
   agents: Agent[];
   activitiesByAgent: Record<string, AgentActivity[]>;
   targetMessageId?: string;
@@ -20,6 +22,8 @@ type Props = {
 export function ThreadPanel({
   root,
   replies,
+  linkedDecisions,
+  linkedDocuments,
   agents,
   activitiesByAgent,
   targetMessageId,
@@ -71,6 +75,21 @@ export function ThreadPanel({
         <button onClick={onClose} style={smallButtonStyle}>{t('thread.close')}</button>
       </div>
       <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 12, background: '#fbfbf7' }}>
+        {(linkedDecisions?.length || linkedDocuments?.length) ? (
+          <div style={{ marginBottom: 12, border: '1.5px solid #000', background: '#fff', padding: 8, fontSize: 11, lineHeight: 1.35 }}>
+            <strong>LINKED</strong>
+            {linkedDecisions?.length ? (
+              <div style={{ marginTop: 4 }}>
+                Decisions: {linkedDecisions.map((decision) => `${decision.id}(${decision.status})`).join(', ')}
+              </div>
+            ) : null}
+            {linkedDocuments?.length ? (
+              <div style={{ marginTop: 4 }}>
+                Documents: {linkedDocuments.map((document) => `${document.id}(${document.kind}/${document.status})`).join(', ')}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <ThreadMessage
           message={root}
           agents={agents}

@@ -3,9 +3,14 @@ import { nanoid } from 'nanoid';
 import {
   createVersionInfo,
   ConfirmGoalAlignmentRequestSchema,
+  CreateDecisionRequestSchema,
+  CreateDocumentRequestSchema,
   CreateKnowledgeEntryRequestSchema,
   CreateReminderRequestSchema,
   CreateTaskReviewRequestSchema,
+  DecisionStatusSchema,
+  DocumentKindSchema,
+  DocumentStatusSchema,
   InternalGoalCreateRequestSchema,
   InternalGoalCreateTasksRequestSchema,
   InternalGoalListRequestSchema,
@@ -27,6 +32,8 @@ import {
   InternalReviewListRequestSchema,
   InternalChannelCreateRequestSchema,
   PatchAgentRequestSchema,
+  PatchDecisionRequestSchema,
+  PatchDocumentRequestSchema,
   PatchReminderRequestSchema,
   ReviewDecisionRequestSchema,
   SearchKnowledgeRequestSchema,
@@ -349,6 +356,134 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     });
     eventBus.emit({ type: 'knowledge:update', entry });
     return reply.status(201).send(entry);
+  });
+
+  app.get<{ Params: { agentId: string }; Querystring: { channelId?: string; status?: string } }>('/internal/agent/:agentId/decisions', async (req, reply) => {
+    const agent = await getStore().getAgent(req.params.agentId);
+    if (!agent) return reply.status(404).send({ error: 'Agent not found' });
+    const status = req.query.status === undefined ? undefined : DecisionStatusSchema.safeParse(req.query.status);
+    if (status && !status.success) return reply.status(400).send({ error: 'Invalid decision status' });
+    return getStore().listDecisions({
+      channelId: req.query.channelId,
+      status: status?.success ? status.data : undefined,
+    });
+  });
+
+  app.post<{ Params: { agentId: string } }>('/internal/agent/:agentId/decisions/create', async (req, reply) => {
+    const agent = await getStore().getAgent(req.params.agentId);
+    if (!agent) return reply.status(404).send({ error: 'Agent not found' });
+    const parsed = CreateDecisionRequestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
+    const decision = await getStore().createDecision({
+      id: nanoid(),
+      channelId: parsed.data.channelId,
+      sourceThreadId: parsed.data.sourceThreadId,
+      title: parsed.data.title,
+      status: 'proposed',
+      problem: parsed.data.problem,
+      alternatives: parsed.data.alternatives,
+      decisionText: parsed.data.decisionText,
+      rationale: parsed.data.rationale,
+      consequences: parsed.data.consequences,
+      participants: parsed.data.participants,
+      relatedDecisions: parsed.data.relatedDecisions,
+    });
+    await getStore().appendAuditLog({
+      actorType: 'agent',
+      actorId: agent.id,
+      action: 'decision.created',
+      entityType: 'decision',
+      entityId: decision.id,
+      detailJson: { status: decision.status },
+    });
+    return reply.status(201).send(decision);
+  });
+
+  app.patch<{ Params: { agentId: string; decisionId: string } }>('/internal/agent/:agentId/decisions/:decisionId', async (req, reply) => {
+    const agent = await getStore().getAgent(req.params.agentId);
+    if (!agent) return reply.status(404).send({ error: 'Agent not found' });
+    const parsed = PatchDecisionRequestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
+    const existing = await getStore().getDecision(req.params.decisionId);
+    if (!existing) return reply.status(404).send({ error: 'Decision not found' });
+    const updated = await getStore().updateDecision(existing.id, {
+      ...parsed.data,
+      acceptedAt: parsed.data.status === 'accepted' ? new Date().toISOString() : existing.acceptedAt,
+    });
+    if (!updated) return reply.status(404).send({ error: 'Decision not found' });
+    await getStore().appendAuditLog({
+      actorType: 'agent',
+      actorId: agent.id,
+      action: parsed.data.status ? 'decision.status_changed' : 'decision.updated',
+      entityType: 'decision',
+      entityId: updated.id,
+      detailJson: parsed.data.status ? { from: existing.status, to: updated.status } : { fields: Object.keys(parsed.data) },
+    });
+    return updated;
+  });
+
+  app.get<{ Params: { agentId: string }; Querystring: { kind?: string; status?: string; channelId?: string } }>('/internal/agent/:agentId/documents', async (req, reply) => {
+    const agent = await getStore().getAgent(req.params.agentId);
+    if (!agent) return reply.status(404).send({ error: 'Agent not found' });
+    const kind = req.query.kind === undefined ? undefined : DocumentKindSchema.safeParse(req.query.kind);
+    if (kind && !kind.success) return reply.status(400).send({ error: 'Invalid document kind' });
+    const status = req.query.status === undefined ? undefined : DocumentStatusSchema.safeParse(req.query.status);
+    if (status && !status.success) return reply.status(400).send({ error: 'Invalid document status' });
+    return getStore().listDocuments({
+      sourceChannelId: req.query.channelId,
+      kind: kind?.success ? kind.data : undefined,
+      status: status?.success ? status.data : undefined,
+    });
+  });
+
+  app.post<{ Params: { agentId: string } }>('/internal/agent/:agentId/documents/create', async (req, reply) => {
+    const agent = await getStore().getAgent(req.params.agentId);
+    if (!agent) return reply.status(404).send({ error: 'Agent not found' });
+    const parsed = CreateDocumentRequestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
+    const document = await getStore().createDocument({
+      id: nanoid(),
+      kind: parsed.data.kind,
+      title: parsed.data.title,
+      status: 'draft',
+      content: parsed.data.content,
+      sourceThreadId: parsed.data.sourceThreadId,
+      sourceChannelId: parsed.data.sourceChannelId,
+      author: { actorType: parsed.data.authorType, actorId: parsed.data.authorId },
+      authorName: parsed.data.authorName,
+      reviewers: [],
+      relatedDecisions: parsed.data.relatedDecisions,
+      relatedTasks: parsed.data.relatedTasks,
+    });
+    await getStore().appendAuditLog({
+      actorType: 'agent',
+      actorId: agent.id,
+      action: 'document.created',
+      entityType: 'document',
+      entityId: document.id,
+      detailJson: { kind: document.kind, status: document.status },
+    });
+    return reply.status(201).send(document);
+  });
+
+  app.patch<{ Params: { agentId: string; documentId: string } }>('/internal/agent/:agentId/documents/:documentId', async (req, reply) => {
+    const agent = await getStore().getAgent(req.params.agentId);
+    if (!agent) return reply.status(404).send({ error: 'Agent not found' });
+    const parsed = PatchDocumentRequestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid request body', issues: parsed.error.issues });
+    const existing = await getStore().getDocument(req.params.documentId);
+    if (!existing) return reply.status(404).send({ error: 'Document not found' });
+    const updated = await getStore().updateDocument(existing.id, parsed.data);
+    if (!updated) return reply.status(404).send({ error: 'Document not found' });
+    await getStore().appendAuditLog({
+      actorType: 'agent',
+      actorId: agent.id,
+      action: 'document.updated',
+      entityType: 'document',
+      entityId: updated.id,
+      detailJson: { fields: Object.keys(parsed.data) },
+    });
+    return updated;
   });
 
   app.post<{ Params: { agentId: string; goalId: string } }>('/internal/agent/:agentId/goals/:goalId/archive', async (req, reply) => {

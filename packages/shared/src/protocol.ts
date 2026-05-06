@@ -102,6 +102,9 @@ export type TaskProgressEventType = 'claimed' | 'started' | 'heartbeat' | 'block
 export type ReviewStatus = 'requested' | 'changes_requested' | 'approved' | 'cancelled';
 export type KnowledgeKind = 'decision' | 'project_archive' | 'user_preference' | 'runbook' | 'learning' | 'artifact';
 export type KnowledgeStatus = 'active' | 'stale' | 'conflict' | 'archived';
+export type DecisionStatus = 'proposed' | 'accepted' | 'deprecated' | 'superseded';
+export type DocumentStatus = 'draft' | 'in_review' | 'approved' | 'deprecated' | 'superseded';
+export type DocumentKind = 'prd' | 'tdd' | 'adr' | 'rfc' | 'test_plan' | 'runbook' | 'postmortem';
 
 export type AgentInboxItem = {
   id: string;
@@ -248,6 +251,8 @@ export type TaskContext = {
   reviewIds?: string[];
   reviewNotes?: string[];
   reviews?: TaskReview[];
+  relatedDecisionIds?: string[];
+  relatedDocumentIds?: string[];
 };
 
 export type Task = {
@@ -285,6 +290,55 @@ export type AuditLogEntry = {
   entityId: string;
   detail?: Record<string, unknown>;
   createdAt: string;
+};
+
+export type DecisionParticipant = {
+  actorType: ActorType;
+  actorId: string;
+  role?: string;
+};
+
+export type Decision = {
+  id: string;
+  channelId: string;
+  sourceThreadId?: string;
+  title: string;
+  status: DecisionStatus;
+  problem: string;
+  alternatives?: string[];
+  decisionText: string;
+  rationale?: string;
+  consequences?: string[];
+  participants?: DecisionParticipant[];
+  relatedDecisions?: string[];
+  supersededBy?: string;
+  acceptedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DocumentReviewer = {
+  actorType: ActorType;
+  actorId: string;
+};
+
+export type Document = {
+  id: string;
+  kind: DocumentKind;
+  title: string;
+  status: DocumentStatus;
+  content: string;
+  sourceThreadId?: string;
+  sourceChannelId: string;
+  author: Actor;
+  authorName: string;
+  reviewers?: DocumentReviewer[];
+  relatedDecisions?: string[];
+  relatedTasks?: string[];
+  supersededBy?: string;
+  approvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type ReminderStatus = 'pending' | 'triggered' | 'cancelled';
@@ -415,6 +469,8 @@ export type Mention = {
 export type MessageThread = {
   root: Message;
   replies: Message[];
+  linkedDecisions?: Decision[];
+  linkedDocuments?: Document[];
 };
 
 export type SearchMessageResult = Message & {
