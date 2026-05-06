@@ -11,12 +11,14 @@ type Props = {
   activitiesByAgent?: Record<string, AgentActivity[]>;
   machines: Machine[];
   runtimeStatus?: RuntimeStatus;
-  selectedView: 'channel' | 'tasks' | 'knowledge';
+  selectedView: 'channel' | 'tasks' | 'knowledge' | 'inbox';
   selectedChannel: string;
   selectedAgentId?: string;
   webVersion: VersionInfo;
   hubVersion?: VersionInfo;
   taskCount: number;
+  inboxCount: number;
+  onSelectInbox: () => void;
   onSelectTasks: () => void;
   onSelectKnowledge: () => void;
   onOpenSearch: () => void;
@@ -65,7 +67,7 @@ const S = {
   },
 };
 
-export function Sidebar({ projects, selectedProjectId, channels, agents, activitiesByAgent = {}, machines, runtimeStatus, selectedView, selectedChannel, selectedAgentId, webVersion, hubVersion, taskCount, onSelectTasks, onSelectKnowledge, onOpenSearch, onSelectProject, onSelectChannel, onCreateChannel, onDeleteChannel, onSelectAgent, onOpenAgents, className, onNavigate, onSignOut }: Props) {
+export function Sidebar({ projects, selectedProjectId, channels, agents, activitiesByAgent = {}, machines, runtimeStatus, selectedView, selectedChannel, selectedAgentId, webVersion, hubVersion, taskCount, inboxCount, onSelectInbox, onSelectTasks, onSelectKnowledge, onOpenSearch, onSelectProject, onSelectChannel, onCreateChannel, onDeleteChannel, onSelectAgent, onOpenAgents, className, onNavigate, onSignOut }: Props) {
   const [creating, setCreating] = useState(false);
   const [channelName, setChannelName] = useState('');
   const [channelError, setChannelError] = useState('');
@@ -127,6 +129,27 @@ export function Sidebar({ projects, selectedProjectId, channels, agents, activit
         <button className="sidebar-item" onClick={() => { onOpenSearch(); onNavigate?.(); }} style={navButtonStyle(false)}>
           <span style={{ flex: 1 }}>{t('nav.search')}</span>
           <span style={{ fontSize: 10 }}>⌘K</span>
+        </button>
+        <button className={`sidebar-item${selectedView === 'inbox' ? ' sidebar-item-active' : ''}`} onClick={() => { onSelectInbox(); onNavigate?.(); }} style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+          width: 'calc(100% - 8px)',
+          margin: '6px 4px 8px',
+          padding: '7px 10px',
+          fontSize: 13,
+          fontFamily: "'Courier New', monospace",
+          fontWeight: 700,
+          border: 'none',
+          borderLeft: selectedView === 'inbox' ? '3px solid #000' : '3px solid transparent',
+          borderRight: selectedView === 'inbox' ? '3px solid #000' : '3px solid transparent',
+          background: selectedView === 'inbox' ? '#000' : '#fff',
+          color: selectedView === 'inbox' ? '#FFD700' : '#000',
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}>
+          <span style={{ flex: 1 }}>Inbox</span>
+          <span style={{ fontSize: 10 }}>{inboxCount}</span>
         </button>
         <button className={`sidebar-item${selectedView === 'tasks' ? ' sidebar-item-active' : ''}`} onClick={() => { onSelectTasks(); onNavigate?.(); }} style={{
           display: 'flex',

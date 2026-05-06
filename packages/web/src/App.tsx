@@ -6,20 +6,21 @@ import { AgentPanel } from './components/AgentPanel.js';
 import { AgentDetailPanel } from './components/AgentDetailPanel.js';
 import { TaskBoard } from './components/TaskBoard.js';
 import { ThreadPanel } from './components/ThreadPanel.js';
+import { InboxPanel } from './components/InboxPanel.js';
 import { GoalDraftPanel } from './components/GoalDraftPanel.js';
 import { GoalAlignmentPanel } from './components/GoalAlignmentPanel.js';
 import { KnowledgePanel } from './components/KnowledgePanel.js';
 import { MobileTopBar } from './components/MobileTopBar.js';
 import { LoginView } from './components/LoginView.js';
 import type { Channel, Message, MessageThread, Agent, Machine, AgentActivity, VersionInfo, Task, Reminder, SearchMessageResult, GoalBrief, GoalAlignment, RuntimeStatus, Project } from './api.js';
-import { AuthError, WEB_COMMIT_SHA, WEB_VERSION, buildWsUrl, getProjects, getChannels, getMessages, getMessageThread, sendMessage, getAgents, getMachines, getAgentActivities, getHubVersion, getTasks, messageToTask, startGoalAlignment, getAgentReminders, createChannel, deleteChannel, searchMessages, setAuthFailureHandler, verifyAuthToken, getRuntimeStatus } from './api.js';
+import { AuthError, WEB_COMMIT_SHA, WEB_VERSION, buildWsUrl, getProjects, getChannels, getMessages, getMessageThread, sendMessage, getAgents, getMachines, getAgentActivities, getHubVersion, getTasks, messageToTask, startGoalAlignment, getAgentReminders, createChannel, deleteChannel, searchMessages, setAuthFailureHandler, verifyAuthToken, getRuntimeStatus, reopenThread, resolveThread } from './api.js';
 import { clearStoredAuthToken, getEffectiveAuthToken, markSignedOut, setStoredAuthToken } from './auth.js';
 import { notifyBrowser, requestPermission } from './notifications.js';
 
 const LAST_PAGE_KEY = 'crewden_last_page';
 const LAST_PROJECT_ID_KEY = 'crewden_last_project_id';
 
-type MainView = 'channel' | 'tasks' | 'knowledge';
+type MainView = 'channel' | 'tasks' | 'knowledge' | 'inbox';
 type StoredPage = {
   selectedView: MainView;
   selectedChannel: string;
@@ -549,6 +550,8 @@ export function App() {
   const currentMessages = messagesByChannel[selectedChannel] ?? [];
   const currentTitle = selectedView === 'tasks'
     ? 'Tasks'
+    : selectedView === 'inbox'
+      ? 'Inbox'
     : selectedView === 'knowledge'
       ? 'Knowledge'
     : selectedAgent
@@ -583,7 +586,7 @@ export function App() {
     <div className="app-shell" style={{ display: 'flex', height: '100vh', fontFamily: "'Courier New', monospace", background: '#fafaf5' }}>
       <MobileTopBar
         title={currentTitle}
-        subtitle={thread ? 'Thread' : selectedView === 'tasks' ? `${tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled').length} open` : selectedView === 'knowledge' ? 'Memory layer' : 'Workspace'}
+        subtitle={thread ? 'Thread' : selectedView === 'tasks' ? `${tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled').length} open` : selectedView === 'inbox' ? 'Aggregated work' : selectedView === 'knowledge' ? 'Memory layer' : 'Workspace'}
         hasThread={!!thread}
         onOpenMenu={() => setSidebarOpen(true)}
         onOpenAgents={() => { setRightPanel('agents'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
@@ -605,6 +608,8 @@ export function App() {
         webVersion={{ component: 'web', version: WEB_VERSION, commit: WEB_COMMIT_SHA || undefined }}
         hubVersion={hubVersion}
         taskCount={tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled').length}
+        inboxCount={tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled' && (task.isBlocked || task.status === 'in_review' || task.status === 'changes_requested' || task.status === 'qa' || Boolean(task.assigneeId))).length}
+        onSelectInbox={() => { setSelectedView('inbox'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
         onSelectTasks={() => { setSelectedView('tasks'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
         onSelectKnowledge={() => { setSelectedView('knowledge'); setSelectedAgentId(undefined); setThread(undefined); setThreadTargetMessageId(undefined); setGoalAlignment(undefined); }}
         onOpenSearch={() => setSearchOpen(true)}
@@ -637,7 +642,9 @@ export function App() {
         onSignOut={handleSignOut}
       />
       <div className="main-pane" style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
-        {selectedView === 'tasks' ? (
+        {selectedView === 'inbox' ? (
+          <InboxPanel tasks={tasks} channels={channels} agents={agents} />
+        ) : selectedView === 'tasks' ? (
           <TaskBoard
             projectId={selectedProjectId}
             tasks={tasks}
@@ -701,6 +708,9 @@ export function App() {
         <ThreadPanel
           root={thread.root}
           replies={thread.replies}
+          status={thread.status}
+          summaryContent={thread.summaryContent}
+          summaryGeneratedAt={thread.summaryGeneratedAt}
           linkedDecisions={thread.linkedDecisions}
           linkedDocuments={thread.linkedDocuments}
           agents={agents}
@@ -708,6 +718,16 @@ export function App() {
           targetMessageId={threadTargetMessageId}
           onClose={() => { setThread(undefined); setThreadTargetMessageId(undefined); }}
           onSend={handleThreadSend}
+          onResolve={async () => {
+            const updated = await resolveThread(thread.root.id);
+            setThread(updated);
+            updateThreadRoot(updated.root);
+          }}
+          onReopen={async () => {
+            const updated = await reopenThread(thread.root.id);
+            setThread(updated);
+            updateThreadRoot(updated.root);
+          }}
           onOpenAgent={handleOpenAgent}
           onTargetMessageSettled={() => setThreadTargetMessageId(undefined)}
         />
@@ -828,6 +848,7 @@ function readLastPage(): StoredPage {
   if (!stored) return fallback;
 
   if (stored === '/tasks') return { ...fallback, selectedView: 'tasks' };
+  if (stored === '/inbox') return { ...fallback, selectedView: 'inbox' };
   if (stored === '/knowledge') return { ...fallback, selectedView: 'knowledge' };
   if (stored === '/agents') return { ...fallback, rightPanel: 'agents' };
 
@@ -859,6 +880,7 @@ function pageToPath({ selectedView, selectedChannel, selectedAgentId, rightPanel
   if (rightPanel === 'agents') return '/agents';
   if (selectedAgentId) return `/agents/${encodeURIComponent(selectedAgentId)}`;
   if (selectedView === 'tasks') return '/tasks';
+  if (selectedView === 'inbox') return '/inbox';
   if (selectedView === 'knowledge') return '/knowledge';
   return `/channels/${encodeURIComponent(selectedChannel)}`;
 }

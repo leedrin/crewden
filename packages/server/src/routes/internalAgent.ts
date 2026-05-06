@@ -304,7 +304,7 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     if (!agent) return reply.status(404).send({ error: 'Agent not found' });
     const parsed = InternalInboxRequestSchema.safeParse(req.query);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid query', issues: parsed.error.issues });
-    return buildInbox(agent, parsed.data.limit);
+    return buildInbox(agent, parsed.data.limit, parsed.data.kind);
   });
 
   app.get<{ Params: { agentId: string }; Querystring: { limit?: string } }>('/internal/agent/:agentId/work', async (req, reply) => {
@@ -313,7 +313,7 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     if (!agent) return reply.status(404).send({ error: 'Agent not found' });
     const parsed = InternalInboxRequestSchema.safeParse(req.query);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid query', issues: parsed.error.issues });
-    return { inbox: await buildInbox(agent, parsed.data.limit), next: 'Work assigned tasks first, claim only matching open tasks, and report blockers with task block/escalate.' };
+    return { inbox: await buildInbox(agent, parsed.data.limit, parsed.data.kind), next: 'Work assigned tasks first, claim only matching open tasks, and report blockers with task block/escalate.' };
   });
 
   app.get<{ Params: { agentId: string }; Querystring: { query?: string; kind?: string; tag?: string; limit?: string } }>('/internal/agent/:agentId/knowledge', async (req, reply) => {
@@ -1196,17 +1196,27 @@ function isHighRiskReviewTask(task: { context?: { risks?: string[] } }): boolean
   return (task.context?.risks ?? []).some((risk) => /high|production|payment|legal|privacy|credential|高风险|上线|支付|隐私/.test(risk.toLowerCase()));
 }
 
-async function buildInbox(agent: Agent, limit: number): Promise<AgentInboxItem[]> {
+async function buildInbox(agent: Agent, limit: number, kindFilter?: AgentInboxItem['kind']): Promise<AgentInboxItem[]> {
   const store = getStore();
-  const tasks = await store.listTasks();
-  const reminders = await store.listReminders(agent.id);
+  const projectId = agent.projectId ?? 'default';
+  const tasks = await store.listTasks({ projectId });
+  const reminders = (await store.listReminders(agent.id)).filter((reminder) => (reminder.projectId ?? 'default') === projectId);
   const dms = await store.listDirectMessageThreads(agent.id);
+  const recentMessages = await store.searchMessages('', 500, projectId);
   const items: AgentInboxItem[] = [];
+  const seen = new Set<string>();
+
+  const pushItem = (item: AgentInboxItem) => {
+    if (seen.has(item.id)) return;
+    seen.add(item.id);
+    items.push(item);
+  };
+
   for (const task of tasks) {
     if (task.status === 'done') continue;
     for (const review of task.context?.reviews ?? []) {
       if (review.status === 'requested' && review.reviewerAgentId === agent.id) {
-        items.push({
+        pushItem({
           id: `review_request:${review.id}`,
           kind: 'review_request',
           agentId: agent.id,
@@ -1221,9 +1231,9 @@ async function buildInbox(agent: Agent, limit: number): Promise<AgentInboxItem[]
       }
     }
     if (task.assigneeId === agent.id) {
-      items.push({
+      pushItem({
         id: `assigned_task:${task.id}`,
-        kind: task.context?.blockedReason ? 'blocked_escalation' : 'assigned_task',
+        kind: task.context?.blockedReason ? 'task_blocked' : 'assigned_task',
         agentId: agent.id,
         channelId: task.channelId,
         messageId: task.messageId,
@@ -1233,8 +1243,27 @@ async function buildInbox(agent: Agent, limit: number): Promise<AgentInboxItem[]
         summary: task.context?.blockedReason ? `Blocked task: ${task.title} (${task.context.blockedReason})` : `Assigned task: ${task.title}`,
         createdAt: task.updatedAt,
       });
+      const threadRootId = task.sourceThreadId ?? task.messageId;
+      if (threadRootId) {
+        const latestThreadMessage = recentMessages.find((message) =>
+          message.id === threadRootId || message.threadRootId === threadRootId,
+        );
+        if (latestThreadMessage && latestThreadMessage.actorId !== agent.id) {
+          pushItem({
+            id: `thread_update:${task.id}:${latestThreadMessage.id}`,
+            kind: 'thread_update',
+            agentId: agent.id,
+            channelId: latestThreadMessage.channelId,
+            messageId: latestThreadMessage.id,
+            taskId: task.id,
+            priority: 'normal',
+            summary: `Thread update on ${task.title}: ${latestThreadMessage.content.slice(0, 100)}`,
+            createdAt: latestThreadMessage.createdAt,
+          });
+        }
+      }
     } else if (!task.assigneeId && matchesAgentCapability(agent, task)) {
-      items.push({
+      pushItem({
         id: `claimable_task:${task.id}`,
         kind: 'claimable_task',
         agentId: agent.id,
@@ -1248,8 +1277,22 @@ async function buildInbox(agent: Agent, limit: number): Promise<AgentInboxItem[]
       });
     }
   }
+  for (const message of recentMessages) {
+    if ((message.mentions ?? []).some((mention) => mention.type === 'agent' && mention.id === agent.id) && message.actorId !== agent.id) {
+      pushItem({
+        id: `mention:${message.id}`,
+        kind: 'mention',
+        agentId: agent.id,
+        channelId: message.channelId,
+        messageId: message.id,
+        priority: 'normal',
+        summary: `${message.senderName} mentioned you: ${message.content.slice(0, 120)}`,
+        createdAt: message.createdAt,
+      });
+    }
+  }
   for (const reminder of reminders.filter((reminder) => reminder.status === 'pending')) {
-    items.push({
+    pushItem({
       id: `reminder:${reminder.id}`,
       kind: 'reminder',
       agentId: agent.id,
@@ -1261,7 +1304,7 @@ async function buildInbox(agent: Agent, limit: number): Promise<AgentInboxItem[]
     });
   }
   for (const thread of dms.slice(0, 10)) {
-    items.push({
+    pushItem({
       id: `dm:${thread.lastMessage.id}`,
       kind: 'dm',
       agentId: agent.id,
@@ -1270,7 +1313,20 @@ async function buildInbox(agent: Agent, limit: number): Promise<AgentInboxItem[]
       createdAt: thread.lastMessage.createdAt,
     });
   }
-  return items.sort(compareInboxItems).slice(0, limit);
+  return items
+    .filter((item) => matchesInboxKind(item.kind, kindFilter))
+    .sort(compareInboxItems)
+    .slice(0, limit);
+}
+
+function matchesInboxKind(itemKind: AgentInboxItem['kind'], kindFilter?: AgentInboxItem['kind']): boolean {
+  if (!kindFilter) return true;
+  if (itemKind === kindFilter) return true;
+  if (kindFilter === 'review_request' && itemKind === 'review_requested') return true;
+  if (kindFilter === 'review_requested' && itemKind === 'review_request') return true;
+  if (kindFilter === 'task_blocked' && itemKind === 'blocked_escalation') return true;
+  if (kindFilter === 'blocked_escalation' && itemKind === 'task_blocked') return true;
+  return false;
 }
 
 function compareInboxItems(a: AgentInboxItem, b: AgentInboxItem): number {

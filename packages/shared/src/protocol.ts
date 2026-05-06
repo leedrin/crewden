@@ -106,7 +106,24 @@ export type TaskType = 'feature' | 'bug' | 'chore' | 'research' | 'docs';
 export type GoalBriefStatus = 'draft' | 'confirmed' | 'cancelled' | 'completed';
 export type GoalAlignmentStatus = 'needs_clarification' | 'awaiting_confirmation' | 'confirmed' | 'cancelled';
 export type GoalAlignmentRiskLevel = 'low' | 'medium' | 'high';
-export type WorkItemKind = 'mention' | 'dm' | 'assigned_task' | 'claimable_task' | 'reminder' | 'review_request' | 'blocked_escalation';
+export type MessageIntent = 'chat' | 'task' | 'goal';
+export type ThreadStatus = 'active' | 'resolved' | 'archived';
+export type ThreadParticipant = {
+  actorType: ActorType;
+  actorId: string;
+};
+export type WorkItemKind =
+  | 'mention'
+  | 'dm'
+  | 'assigned_task'
+  | 'claimable_task'
+  | 'reminder'
+  | 'review_request'
+  | 'blocked_escalation'
+  | 'review_requested'
+  | 'approval_required'
+  | 'task_blocked'
+  | 'thread_update';
 export type WorkItemPriority = 'low' | 'normal' | 'high' | 'urgent';
 export type TaskProgressEventType = 'claimed' | 'started' | 'heartbeat' | 'blocked' | 'handoff' | 'completed' | 'escalated';
 export type ReviewStatus = 'requested' | 'changes_requested' | 'approved' | 'cancelled';
@@ -473,6 +490,7 @@ export type Message = {
   senderName: string;
   content: string;
   threadRootId?: string;
+  intent?: MessageIntent;
   replyCount?: number;
   latestReplyAt?: string;
   mentions?: Mention[];
@@ -488,6 +506,13 @@ export type Mention = {
 export type MessageThread = {
   root: Message;
   replies: Message[];
+  title?: string;
+  status?: ThreadStatus;
+  summaryContent?: string;
+  summaryGeneratedAt?: string;
+  messageCount?: number;
+  participants?: ThreadParticipant[];
+  resolvedAt?: string;
   linkedDecisions?: Decision[];
   linkedDocuments?: Document[];
 };

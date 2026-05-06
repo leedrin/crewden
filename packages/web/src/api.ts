@@ -17,7 +17,10 @@ export type Channel = { id: string; name: string; createdAt: string };
 export type Mention = { type: 'agent' | 'user'; id: string; label: string };
 export type ActorType = 'human' | 'agent' | 'system';
 export type Actor = { actorType: ActorType; actorId: string };
-export type Message = { id: string; channelId: string; senderName: string; content: string; actorType: ActorType; actorId: string; agentId?: string; threadRootId?: string; replyCount?: number; latestReplyAt?: string; mentions?: Mention[]; createdAt: string };
+export type MessageIntent = 'chat' | 'task' | 'goal';
+export type ThreadStatus = 'active' | 'resolved' | 'archived';
+export type ThreadParticipant = { actorType: ActorType; actorId: string };
+export type Message = { id: string; projectId?: string; channelId: string; senderName: string; content: string; actorType: ActorType; actorId: string; agentId?: string; threadRootId?: string; intent?: MessageIntent; replyCount?: number; latestReplyAt?: string; mentions?: Mention[]; createdAt: string };
 export type DecisionStatus = 'proposed' | 'accepted' | 'deprecated' | 'superseded';
 export type DocumentStatus = 'draft' | 'in_review' | 'approved' | 'deprecated' | 'superseded';
 export type DocumentKind = 'prd' | 'tdd' | 'adr' | 'rfc' | 'test_plan' | 'runbook' | 'postmortem';
@@ -57,7 +60,19 @@ export type Document = {
   createdAt: string;
   updatedAt: string;
 };
-export type MessageThread = { root: Message; replies: Message[]; linkedDecisions?: Decision[]; linkedDocuments?: Document[] };
+export type MessageThread = {
+  root: Message;
+  replies: Message[];
+  title?: string;
+  status?: ThreadStatus;
+  summaryContent?: string;
+  summaryGeneratedAt?: string;
+  messageCount?: number;
+  participants?: ThreadParticipant[];
+  resolvedAt?: string;
+  linkedDecisions?: Decision[];
+  linkedDocuments?: Document[];
+};
 export type SearchMessageResult = Message & { channelName: string };
 export type AgentOrganization = { department?: string; roles?: string[]; capabilities?: string[]; responsibilities?: string[]; managerId?: string; backupAgentIds?: string[]; availability?: 'available' | 'unavailable' | 'overloaded' };
 export type AgentRole = 'unassigned' | 'product' | 'architect' | 'developer' | 'qa' | 'reviewer' | 'security' | 'devops' | 'documentation' | 'coordinator' | 'planner';
@@ -184,7 +199,8 @@ export type GoalAlignment = { id: string; channelId: string; threadRootId: strin
 export type ReminderStatus = 'pending' | 'triggered' | 'cancelled';
 export type Reminder = { id: string; agentId: string; channelId: string; message: string; triggerAt: string; status: ReminderStatus; createdAt: string };
 export type AuthWhoami = { authenticated: boolean; mode: 'token' | 'anonymous' };
-export type AgentInboxItem = { id: string; kind: 'mention' | 'dm' | 'assigned_task' | 'claimable_task' | 'reminder' | 'review_request' | 'blocked_escalation'; agentId: string; channelId?: string; messageId?: string; taskId?: string; goalId?: string; priority: 'low' | 'normal' | 'high' | 'urgent'; summary: string; dueAt?: string; createdAt: string };
+export type AgentInboxKind = 'mention' | 'dm' | 'assigned_task' | 'claimable_task' | 'reminder' | 'review_request' | 'blocked_escalation' | 'review_requested' | 'approval_required' | 'task_blocked' | 'thread_update';
+export type AgentInboxItem = { id: string; kind: AgentInboxKind; agentId: string; channelId?: string; messageId?: string; taskId?: string; goalId?: string; priority: 'low' | 'normal' | 'high' | 'urgent'; summary: string; dueAt?: string; createdAt: string };
 export type KnowledgeKind = 'decision' | 'project_archive' | 'user_preference' | 'runbook' | 'learning' | 'artifact';
 export type KnowledgeStatus = 'active' | 'stale' | 'conflict' | 'archived';
 export type KnowledgeEntry = { id: string; kind: KnowledgeKind; title: string; summary: string; body: string; tags: string[]; sourceRefs: string[]; ownerAgentId?: string; reviewerAgentId?: string; status: KnowledgeStatus; createdAt: string; updatedAt: string };
@@ -307,8 +323,26 @@ export async function getMessages(channelId: string): Promise<Message[]> {
 }
 
 export async function getMessageThread(messageId: string): Promise<MessageThread> {
-  const r = await apiFetch(`${API_BASE}/api/messages/${encodeURIComponent(messageId)}/thread`, { headers: authHeaders() });
+  const r = await apiFetch(`${API_BASE}/api/threads/${encodeURIComponent(messageId)}`, { headers: authHeaders() });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Load thread failed');
+  return r.json();
+}
+
+export async function resolveThread(messageId: string): Promise<MessageThread> {
+  const r = await apiFetch(`${API_BASE}/api/threads/${encodeURIComponent(messageId)}/resolve`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Resolve thread failed');
+  return r.json();
+}
+
+export async function reopenThread(messageId: string): Promise<MessageThread> {
+  const r = await apiFetch(`${API_BASE}/api/threads/${encodeURIComponent(messageId)}/reopen`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Reopen thread failed');
   return r.json();
 }
 
@@ -332,6 +366,16 @@ export async function getAgents(filter: { projectId?: string } = {}): Promise<Ag
 
 export async function getAgentActivities(agentId: string): Promise<AgentActivity[]> {
   const r = await apiFetch(`${API_BASE}/api/agents/${agentId}/activities`, { headers: authHeaders() });
+  return r.json();
+}
+
+export async function getAgentInbox(agentId: string, options: { kind?: AgentInboxKind; limit?: number } = {}): Promise<AgentInboxItem[]> {
+  const params = new URLSearchParams();
+  if (options.kind) params.set('kind', options.kind);
+  if (options.limit !== undefined) params.set('limit', String(options.limit));
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const r = await apiFetch(`${API_BASE}/internal/agent/${encodeURIComponent(agentId)}/inbox${query}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Load inbox failed');
   return r.json();
 }
 

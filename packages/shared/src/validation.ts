@@ -18,7 +18,21 @@ export const TaskTypeSchema = z.enum(['feature', 'bug', 'chore', 'research', 'do
 export const GoalBriefStatusSchema = z.enum(['draft', 'confirmed', 'cancelled', 'completed']);
 export const GoalAlignmentStatusSchema = z.enum(['needs_clarification', 'awaiting_confirmation', 'confirmed', 'cancelled']);
 export const GoalAlignmentRiskLevelSchema = z.enum(['low', 'medium', 'high']);
-export const WorkItemKindSchema = z.enum(['mention', 'dm', 'assigned_task', 'claimable_task', 'reminder', 'review_request', 'blocked_escalation']);
+export const MessageIntentSchema = z.enum(['chat', 'task', 'goal']);
+export const ThreadStatusSchema = z.enum(['active', 'resolved', 'archived']);
+export const WorkItemKindSchema = z.enum([
+  'mention',
+  'dm',
+  'assigned_task',
+  'claimable_task',
+  'reminder',
+  'review_request',
+  'blocked_escalation',
+  'review_requested',
+  'approval_required',
+  'task_blocked',
+  'thread_update',
+]);
 export const WorkItemPrioritySchema = z.enum(['low', 'normal', 'high', 'urgent']);
 export const TaskProgressEventTypeSchema = z.enum(['claimed', 'started', 'heartbeat', 'blocked', 'handoff', 'completed', 'escalated']);
 export const ReviewStatusSchema = z.enum(['requested', 'changes_requested', 'approved', 'cancelled']);
@@ -259,6 +273,7 @@ export const MessageSchema = z.object({
   senderName: z.string(),
   content: z.string(),
   threadRootId: z.string().optional(),
+  intent: MessageIntentSchema.optional(),
   replyCount: z.number().int().nonnegative().optional(),
   latestReplyAt: z.string().optional(),
   mentions: z.array(MentionSchema).optional(),
@@ -877,6 +892,7 @@ export const InternalTaskHandoffRequestSchema = z.object({
 
 export const InternalInboxRequestSchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(20),
+  kind: WorkItemKindSchema.optional(),
 });
 
 export const InternalTaskProgressRequestSchema = z.object({

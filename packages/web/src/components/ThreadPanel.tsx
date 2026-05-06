@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { Agent, AgentActivity, Decision, Document, Message } from '../api.js';
+import type { Agent, AgentActivity, Decision, Document, Message, ThreadStatus } from '../api.js';
 import { MessageContent } from './MessageContent.js';
 import { PresenceAvatar } from './PresenceAvatar.js';
 import { Composer } from './Composer.js';
@@ -8,6 +8,9 @@ import { t } from '../i18n.js';
 type Props = {
   root: Message;
   replies: Message[];
+  status?: ThreadStatus;
+  summaryContent?: string;
+  summaryGeneratedAt?: string;
   linkedDecisions?: Decision[];
   linkedDocuments?: Document[];
   agents: Agent[];
@@ -15,6 +18,8 @@ type Props = {
   targetMessageId?: string;
   onClose: () => void;
   onSend: (content: string, agentId?: string) => void;
+  onResolve?: () => void;
+  onReopen?: () => void;
   onOpenAgent?: (agentId: string) => void;
   onTargetMessageSettled?: () => void;
 };
@@ -22,6 +27,9 @@ type Props = {
 export function ThreadPanel({
   root,
   replies,
+  status,
+  summaryContent,
+  summaryGeneratedAt,
   linkedDecisions,
   linkedDocuments,
   agents,
@@ -29,6 +37,8 @@ export function ThreadPanel({
   targetMessageId,
   onClose,
   onSend,
+  onResolve,
+  onReopen,
   onOpenAgent,
   onTargetMessageSettled,
 }: Props) {
@@ -72,9 +82,28 @@ export function ThreadPanel({
         flexShrink: 0,
       }}>
         <strong>{t('thread.title')}</strong>
-        <button onClick={onClose} style={smallButtonStyle}>{t('thread.close')}</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={threadStatusBadgeStyle(status ?? 'active')}>{status ?? 'active'}</span>
+          {status === 'resolved' ? (
+            <button onClick={onReopen} style={smallButtonStyle}>Reopen</button>
+          ) : (
+            <button onClick={onResolve} style={smallButtonStyle}>Resolve</button>
+          )}
+          <button onClick={onClose} style={smallButtonStyle}>{t('thread.close')}</button>
+        </div>
       </div>
       <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 12, background: '#fbfbf7' }}>
+        {summaryContent ? (
+          <div style={{ marginBottom: 12, border: '1.5px solid #000', background: '#f7fff2', padding: 8, fontSize: 11, lineHeight: 1.35, whiteSpace: 'pre-wrap' }}>
+            <strong>SUMMARY</strong>
+            {summaryGeneratedAt ? (
+              <div style={{ marginTop: 4, color: '#5a5a5a', fontSize: 10 }}>
+                Generated at {formatTime(summaryGeneratedAt)}
+              </div>
+            ) : null}
+            <div style={{ marginTop: 6 }}>{summaryContent}</div>
+          </div>
+        ) : null}
         {(linkedDecisions?.length || linkedDocuments?.length) ? (
           <div style={{ marginBottom: 12, border: '1.5px solid #000', background: '#fff', padding: 8, fontSize: 11, lineHeight: 1.35 }}>
             <strong>LINKED</strong>
@@ -148,6 +177,7 @@ function ThreadMessage({ message, agents, activitiesByAgent, root = false, group
         {!grouped && (
           <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginBottom: 2 }}>
             <strong style={{ fontSize: 12 }}>{message.senderName}</strong>
+            <span style={intentBadgeStyle(message.intent ?? 'chat')}>{message.intent ?? 'chat'}</span>
             <span style={{ fontSize: 10, color: '#888' }}>{formatTime(message.createdAt)}</span>
           </div>
         )}
@@ -165,6 +195,41 @@ const smallButtonStyle: React.CSSProperties = {
   cursor: 'pointer',
   padding: '4px 7px',
 };
+
+function threadStatusBadgeStyle(status: ThreadStatus): React.CSSProperties {
+  const palette: Record<ThreadStatus, { bg: string; fg: string }> = {
+    active: { bg: '#e8f3ff', fg: '#0b4f8a' },
+    resolved: { bg: '#e9fbe8', fg: '#1b6a1a' },
+    archived: { bg: '#f0f0f0', fg: '#555' },
+  };
+  const colors = palette[status];
+  return {
+    border: '1px solid #000',
+    background: colors.bg,
+    color: colors.fg,
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    padding: '2px 6px',
+  };
+}
+
+function intentBadgeStyle(intent: 'chat' | 'task' | 'goal'): React.CSSProperties {
+  const palette = {
+    goal: { bg: '#dbeaff', fg: '#1547a0' },
+    task: { bg: '#e7fae7', fg: '#156a2b' },
+    chat: { bg: '#efefef', fg: '#555' },
+  } as const;
+  return {
+    border: '1px solid #999',
+    background: palette[intent].bg,
+    color: palette[intent].fg,
+    fontSize: 9,
+    fontWeight: 700,
+    padding: '1px 5px',
+    textTransform: 'uppercase',
+  };
+}
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });

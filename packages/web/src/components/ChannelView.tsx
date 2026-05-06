@@ -222,6 +222,7 @@ export function ChannelView({
                 {!grouped && (
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 3 }}>
                     <span style={{ fontWeight: 700, fontSize: 13 }}>{msg.senderName}</span>
+                    <span style={intentBadgeStyle(msg.intent ?? 'chat')}>{msg.intent ?? 'chat'}</span>
                     <span style={{ fontSize: 10, color: '#999', fontFamily: "'Courier New', monospace" }}>
                       {formatTime(msg.createdAt)}
                     </span>
@@ -366,6 +367,23 @@ const threadListItemStyle: React.CSSProperties = {
   fontSize: 12,
   cursor: 'pointer',
 };
+
+function intentBadgeStyle(intent: 'chat' | 'task' | 'goal'): React.CSSProperties {
+  const palette = {
+    goal: { bg: '#dbeaff', fg: '#1547a0' },
+    task: { bg: '#e7fae7', fg: '#156a2b' },
+    chat: { bg: '#efefef', fg: '#555' },
+  } as const;
+  return {
+    border: '1px solid #999',
+    background: palette[intent].bg,
+    color: palette[intent].fg,
+    fontSize: 9,
+    fontWeight: 700,
+    padding: '1px 5px',
+    textTransform: 'uppercase',
+  };
+}
 
 function isNearBottom(element: HTMLElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight < 80;

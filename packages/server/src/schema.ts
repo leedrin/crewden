@@ -17,8 +17,25 @@ export const messages = sqliteTable('messages', {
   actorType: text('actor_type').notNull().default('human'),
   actorId: text('actor_id'),
   threadRootId: text('thread_root_id'),
+  intent: text('intent').notNull().default('chat'),
   mentions: text('mentions'),
   createdAt: text('created_at').notNull(),
+});
+
+export const threadSummaries = sqliteTable('thread_summaries', {
+  threadRootId: text('thread_root_id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
+  title: text('title'),
+  status: text('status').notNull().default('active'),
+  summaryContent: text('summary_content'),
+  summaryGeneratedAt: text('summary_generated_at'),
+  linkedDecisions: text('linked_decisions'),
+  linkedDocuments: text('linked_documents'),
+  linkedTasks: text('linked_tasks'),
+  messageCount: integer('message_count').notNull().default(0),
+  participants: text('participants'),
+  createdAt: text('created_at'),
+  resolvedAt: text('resolved_at'),
 });
 
 export const activities = sqliteTable('activities', {

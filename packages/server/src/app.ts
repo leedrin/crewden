@@ -3,6 +3,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import fastifyCors from '@fastify/cors';
 import { channelRoutes } from './routes/channels.js';
 import { messageRoutes } from './routes/messages.js';
+import { threadRoutes } from './routes/threads.js';
 import { agentRoutes } from './routes/agents.js';
 import { machineRoutes } from './routes/machines.js';
 import { internalAgentRoutes } from './routes/internalAgent.js';
@@ -53,6 +54,7 @@ export async function buildApp(opts: { logger?: boolean } = {}) {
 
   await app.register(channelRoutes);
   await app.register(messageRoutes);
+  await app.register(threadRoutes);
   await app.register(agentRoutes);
   await app.register(machineRoutes);
   await app.register(taskRoutes);
