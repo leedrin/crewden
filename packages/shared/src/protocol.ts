@@ -254,6 +254,25 @@ export type GoalAlignment = {
   updatedAt: string;
 };
 
+export type ContextSectionSource = 'task' | 'decision' | 'document' | 'thread_summary' | 'parent_task_result';
+
+export type ContextSection = {
+  priority: number;
+  source: ContextSectionSource;
+  title: string;
+  content: string;
+  tokenEstimate: number;
+};
+
+export type ContextPackage = {
+  taskId: string;
+  generatedAt: string;
+  sections: ContextSection[];
+  totalTokens: number;
+  agentMaxTokens: number;
+  truncationApplied: boolean;
+};
+
 export type TaskContext = {
   goalId?: string;
   goalObjective?: string;
@@ -284,6 +303,7 @@ export type TaskContext = {
   reviews?: TaskReview[];
   relatedDecisionIds?: string[];
   relatedDocumentIds?: string[];
+  contextPackage?: ContextPackage;
 };
 
 export type Task = {

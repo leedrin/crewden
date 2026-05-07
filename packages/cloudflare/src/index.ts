@@ -95,7 +95,7 @@ import {
   ApproveDocumentRequestSchema,
   TaskStatusSchema,
 } from '@crewden/shared';
-import { buildClarifyingQuestions, findDuplicateMachineIds, inferGoalRiskLevel, recommendAgentsForGoal, resolveAgentReference, resolveAgents, resolveStartMachineId, toAgentDelivery, toRuntimeConfig } from '@crewden/hub-core';
+import { buildClarifyingQuestions, buildContextPackage, findDuplicateMachineIds, inferGoalRiskLevel, recommendAgentsForGoal, resolveAgentReference, resolveAgents, resolveStartMachineId, toAgentDelivery, toRuntimeConfig } from '@crewden/hub-core';
 
 type SocketAttachment =
   | { kind: 'browser' }
@@ -229,16 +229,21 @@ export class CrewdenHub extends DurableObject<Env> {
       }
 
       if (request.method === 'POST' && url.pathname === '/api/tasks') {
-        return this.createUserTask(await request.json());
+        return await this.createUserTask(await request.json());
       }
 
       const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
       if (taskMatch && request.method === 'PATCH') {
-        return this.patchTask(decodeURIComponent(taskMatch[1]), await request.json());
+        return await this.patchTask(decodeURIComponent(taskMatch[1]), await request.json());
       }
 
       if (taskMatch && request.method === 'DELETE') {
         return this.deleteTask(decodeURIComponent(taskMatch[1]));
+      }
+
+      const taskContextPkgMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/context-package$/);
+      if (taskContextPkgMatch && request.method === 'POST') {
+        return this.regenerateContextPackage(decodeURIComponent(taskContextPkgMatch[1]));
       }
 
       const taskReviewsMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/reviews$/);
@@ -1173,7 +1178,7 @@ export class CrewdenHub extends DurableObject<Env> {
     return new Response(null, { status: 204, headers: JSON_HEADERS });
   }
 
-  private createUserTask(body: unknown): Response {
+  private async createUserTask(body: unknown): Promise<Response> {
     const parsed = CreateTaskRequestSchema.safeParse(body);
     if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
     if (!this.getChannel(parsed.data.channelId)) return json({ error: 'Channel not found' }, 404);
@@ -1214,6 +1219,10 @@ export class CrewdenHub extends DurableObject<Env> {
     });
     this.broadcast({ type: 'task:update', task });
     this.notifyTaskAssignee(task);
+    if (task.status === 'assigned' && task.assigneeId) {
+      const cp = await this.generateAndStoreContextPackage(task);
+      if (cp) task.context = { ...task.context, contextPackage: cp };
+    }
     return json(task, 201);
   }
 
@@ -1523,7 +1532,7 @@ export class CrewdenHub extends DurableObject<Env> {
     return json(updated);
   }
 
-  private patchTask(taskId: string, body: unknown): Response {
+  private async patchTask(taskId: string, body: unknown): Promise<Response> {
     const parsed = PatchTaskRequestSchema.safeParse(body);
     if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
     const { expectedVersion, ...patch } = parsed.data;
@@ -1557,6 +1566,10 @@ export class CrewdenHub extends DurableObject<Env> {
     this.broadcast({ type: 'task:update', task });
     this.notifyTaskAssignee(task);
     if (task.status === 'done' && existing.status !== 'done') this.notifyTasksBlockedBy(task.id);
+    if (task.status === 'assigned' && existing.status !== 'assigned' && task.assigneeId) {
+      const cp = await this.generateAndStoreContextPackage(task);
+      if (cp) task.context = { ...task.context, contextPackage: cp };
+    }
     return json(task);
   }
 
@@ -3687,6 +3700,41 @@ export class CrewdenHub extends DurableObject<Env> {
     const updated = this.updateAgent(target.id, { machineId, status: 'starting' });
     if (updated) this.broadcast({ type: 'agent:update', agent: updated });
     return this.updateAgentDelegation(queued, 'started');
+  }
+
+  private async regenerateContextPackage(taskId: string): Promise<Response> {
+    const task = this.getTask(taskId);
+    if (!task) return json({ error: 'Task not found' }, 404);
+    if (!task.assigneeId) return json({ error: 'Task has no assignee' }, 422);
+    const cp = await this.generateAndStoreContextPackage(task);
+    return cp ? json(cp) : json({ error: 'Failed to generate context package' }, 500);
+  }
+
+  private async generateAndStoreContextPackage(task: Task): Promise<import('@crewden/shared').ContextPackage | undefined> {
+    if (!task.assigneeId) return undefined;
+    try {
+      const cp = await buildContextPackage(task, task.assigneeId, {
+        getDecision: async (id: string) => {
+          const all = this.listDecisions({ channelId: task.channelId });
+          return all.find((d) => d.id === id);
+        },
+        getDocument: async (id: string) => {
+          const all = this.listDocuments({ sourceChannelId: task.channelId });
+          return all.find((d) => d.id === id);
+        },
+        getThreadSummary: async () => undefined,
+        getTask: async (taskId: string) => this.getTask(taskId),
+        getAgent: async (agentId: string) => this.getAgent(agentId),
+        getAgentPermissions: async () => undefined,
+      });
+      this.updateTask(task.id, {
+        context: { ...task.context, contextPackage: cp },
+      });
+      return cp;
+    } catch (err) {
+      console.error('[ctx-pkg] buildContextPackage failed for task', task.id, ':', err);
+      return undefined;
+    }
   }
 
   private notifyTaskAssignee(task: Task): void {

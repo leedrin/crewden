@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
-import { CreateTaskRequestSchema, CreateTaskReviewRequestSchema, MessageToTaskRequestSchema, PatchTaskRequestSchema, ReviewDecisionRequestSchema, TaskStatusSchema, type ActorType, type TaskReview, type TaskStatus } from '@crewden/shared';
+import { CreateTaskRequestSchema, CreateTaskReviewRequestSchema, MessageToTaskRequestSchema, PatchTaskRequestSchema, ReviewDecisionRequestSchema, TaskStatusSchema, type ActorType, type Task, type TaskReview, type TaskStatus } from '@crewden/shared';
+import { buildContextPackage } from '@crewden/hub-core';
 import { getStore } from '../db.js';
 import { eventBus } from '../events.js';
 import { notifyTaskAssignee, notifyTasksBlockedBy } from '../taskDelivery.js';
@@ -70,6 +71,13 @@ export async function taskRoutes(app: FastifyInstance) {
     });
     eventBus.emit({ type: 'task:update', task });
     await notifyTaskAssignee(task);
+    if (task.status === 'assigned' && task.assigneeId) {
+      const cp = await generateAndStoreContextPackage(task);
+      if (cp) {
+        const fresh = await getStore().getTask(task.id);
+        if (fresh) return reply.status(201).send(fresh);
+      }
+    }
     return reply.status(201).send(task);
   });
 
@@ -117,6 +125,13 @@ export async function taskRoutes(app: FastifyInstance) {
     eventBus.emit({ type: 'task:update', task });
     await notifyTaskAssignee(task);
     if (task.status === 'done' && existing.status !== 'done') await notifyTasksBlockedBy(task.id);
+    if (task.status === 'assigned' && existing.status !== 'assigned' && task.assigneeId) {
+      const cp = await generateAndStoreContextPackage(task);
+      if (cp) {
+        const fresh = await getStore().getTask(task.id);
+        if (fresh) return fresh;
+      }
+    }
     return task;
   });
 
@@ -124,6 +139,15 @@ export async function taskRoutes(app: FastifyInstance) {
     const ok = await getStore().deleteTask(req.params.id);
     if (!ok) return reply.status(404).send({ error: 'Task not found' });
     return reply.status(204).send();
+  });
+
+  app.post<{ Params: { id: string } }>('/api/tasks/:id/context-package', async (req, reply) => {
+    const store = getStore();
+    const task = await store.getTask(req.params.id);
+    if (!task) return reply.status(404).send({ error: 'Task not found' });
+    if (!task.assigneeId) return reply.status(422).send({ error: 'Task has no assignee' });
+    const contextPackage = await generateAndStoreContextPackage(task);
+    return contextPackage ?? reply.status(500).send({ error: 'Failed to generate context package' });
   });
 
   app.post<{ Params: { id: string } }>('/api/messages/:id/to-task', async (req, reply) => {
@@ -274,6 +298,35 @@ function createReview(taskId: string, data: { requesterAgentId?: string; reviewe
 
 function isHighRisk(task: { context?: { risks?: string[] } }): boolean {
   return (task.context?.risks ?? []).some((risk) => /high|production|payment|legal|privacy|credential|高风险|上线|支付|隐私/.test(risk.toLowerCase()));
+}
+
+async function generateAndStoreContextPackage(task: Task): Promise<import('@crewden/shared').ContextPackage | undefined> {
+  if (!task.assigneeId) return undefined;
+  const store = getStore();
+  let contextPackage;
+  try {
+    contextPackage = await buildContextPackage(task, task.assigneeId, {
+      getDecision: async (id) => {
+        const all = await store.listDecisions({ projectId: task.projectId });
+        return all.find((d) => d.id === id);
+      },
+      getDocument: async (id) => {
+        const all = await store.listDocuments({ projectId: task.projectId });
+        return all.find((d) => d.id === id);
+      },
+      getThreadSummary: async (threadId) => store.getThreadSummary(threadId),
+      getTask: async (taskId) => store.getTask(taskId),
+      getAgent: async (agentId) => store.getAgent(agentId),
+      getAgentPermissions: async (agentId) => store.getAgentPermissions(agentId),
+    });
+  } catch (err) {
+    console.error('[ctx-pkg] buildContextPackage failed for task', task.id, ':', err);
+    return undefined;
+  }
+  await store.updateTask(task.id, {
+    context: { ...task.context, contextPackage },
+  });
+  return contextPackage;
 }
 
 function isTaskTransitionAllowed(from: TaskStatus, to: TaskStatus): boolean {

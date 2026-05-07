@@ -168,7 +168,10 @@ export type GoalAlignmentStatus = 'needs_clarification' | 'awaiting_confirmation
 export type GoalAlignmentRiskLevel = 'low' | 'medium' | 'high';
 export type TaskProgressEvent = { id: string; taskId: string; agentId: string; type: 'claimed' | 'started' | 'heartbeat' | 'blocked' | 'handoff' | 'completed' | 'escalated'; detail: string; createdAt: string };
 export type TaskReview = { id: string; taskId: string; requesterAgentId?: string; reviewerAgentId?: string; status: 'requested' | 'changes_requested' | 'approved' | 'cancelled'; evidence: string[]; checklist: Array<{ label: string; checked: boolean }>; comment?: string; createdAt: string; updatedAt: string };
-export type TaskContext = { goalId?: string; goalObjective?: string; goal?: string; background?: string; acceptanceCriteria?: string[]; constraints?: string[]; assumptions?: string[]; risks?: string[]; dependencies?: string[]; blockedByTaskIds?: string[]; sourceMessageIds?: string[]; artifacts?: string[]; requesterAgentId?: string; previousAgentId?: string; handoffNotes?: string[]; privateNotes?: string[]; claimedByAgentId?: string; blockedReason?: string; blockedNeeds?: string; escalatedReason?: string; progressEvents?: TaskProgressEvent[]; reviewerAgentId?: string; evidence?: string[]; acceptanceChecklist?: string[]; reviewIds?: string[]; reviewNotes?: string[]; reviews?: TaskReview[]; relatedDecisionIds?: string[]; relatedDocumentIds?: string[] };
+export type ContextSectionSource = 'task' | 'decision' | 'document' | 'thread_summary' | 'parent_task_result';
+export type ContextSection = { priority: number; source: ContextSectionSource; title: string; content: string; tokenEstimate: number };
+export type ContextPackage = { taskId: string; generatedAt: string; sections: ContextSection[]; totalTokens: number; agentMaxTokens: number; truncationApplied: boolean };
+export type TaskContext = { goalId?: string; goalObjective?: string; goal?: string; background?: string; acceptanceCriteria?: string[]; constraints?: string[]; assumptions?: string[]; risks?: string[]; dependencies?: string[]; blockedByTaskIds?: string[]; sourceMessageIds?: string[]; artifacts?: string[]; requesterAgentId?: string; previousAgentId?: string; handoffNotes?: string[]; privateNotes?: string[]; claimedByAgentId?: string; blockedReason?: string; blockedNeeds?: string; escalatedReason?: string; progressEvents?: TaskProgressEvent[]; reviewerAgentId?: string; evidence?: string[]; acceptanceChecklist?: string[]; reviewIds?: string[]; reviewNotes?: string[]; reviews?: TaskReview[]; relatedDecisionIds?: string[]; relatedDocumentIds?: string[]; contextPackage?: ContextPackage };
 export type Task = {
   id: string;
   channelId: string;
@@ -538,6 +541,15 @@ export async function patchTask(taskId: string, data: { status?: TaskStatus; ass
 
 export async function deleteTask(taskId: string): Promise<void> {
   await apiFetch(`${API_BASE}/api/tasks/${taskId}`, { method: 'DELETE', headers: authHeaders() });
+}
+
+export async function regenerateContextPackage(taskId: string): Promise<ContextPackage> {
+  const r = await apiFetch(`${API_BASE}/api/tasks/${taskId}/context-package`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Regenerate context package failed');
+  return r.json();
 }
 
 export async function messageToTask(messageId: string, data: { assigneeId?: string; creatorName?: string } = {}): Promise<Task> {
