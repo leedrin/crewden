@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type React from 'react';
 import type { Agent, Channel, Task, TaskStatus } from '../api.js';
-import { createTask, deleteTask, patchTask } from '../api.js';
+import { createTask, deleteTask, patchTask, regenerateContextPackage } from '../api.js';
 
 type Props = {
   projectId: string;
@@ -189,6 +189,58 @@ function resolveDropStatus(from: TaskStatus, columnId: BoardColumnId): TaskStatu
   return COLUMNS.find((column) => column.id === columnId)?.defaultStatus ?? from;
 }
 
+function ContextPackagePreview({ task, onPatch }: { task: Task; onPatch: (task: Task) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const cp = task.context?.contextPackage;
+
+  if (!cp) return null;
+
+  async function handleRegenerate() {
+    setRegenerating(true);
+    try {
+      const updated = await regenerateContextPackage(task.id);
+      onPatch({ ...task, context: { ...task.context, contextPackage: updated } });
+    } catch {
+      // silently ignore
+    } finally {
+      setRegenerating(false);
+    }
+  }
+
+  const tokenPercent = Math.round((cp.totalTokens / cp.agentMaxTokens) * 100);
+
+  return (
+    <div style={{ marginTop: 8, border: '1.5px solid #4338ca', background: '#eef2ff', padding: 7, fontSize: 11, lineHeight: 1.35 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <strong style={{ cursor: 'pointer' }} onClick={() => setExpanded(!expanded)}>
+          CTX PKG [{cp.sections.length} sections] {tokenPercent}% {cp.truncationApplied ? '(truncated)' : ''}
+        </strong>
+        <button
+          disabled={regenerating}
+          onClick={() => void handleRegenerate()}
+          style={{ ...iconButtonStyle, fontSize: 10, padding: '1px 4px' }}
+        >
+          {regenerating ? '...' : '↻'}
+        </button>
+      </div>
+      {expanded ? (
+        <div style={{ marginTop: 4 }}>
+          {cp.sections.map((section, i) => (
+            <div key={i} style={{ marginTop: 2, borderBottom: '1px solid #c7d2fe', paddingBottom: 2 }}>
+              <div style={{ fontWeight: 700 }}>{section.title} <span style={{ fontWeight: 400, color: '#6366f1' }}>~{section.tokenEstimate}tok</span></div>
+              <div style={{ whiteSpace: 'pre-wrap', maxHeight: 80, overflow: 'hidden', color: '#334155' }}>{section.content}</div>
+            </div>
+          ))}
+          <div style={{ marginTop: 4, color: '#6366f1' }}>
+            Total: ~{cp.totalTokens} / {cp.agentMaxTokens} tokens
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function TaskCard({ task, agents, channels, onStatus, onDelete, onPatch, compact = false }: {
   task: Task;
   agents: Agent[];
@@ -298,6 +350,7 @@ function TaskCard({ task, agents, channels, onStatus, onDelete, onPatch, compact
           {latestReview?.comment ? <div>Note: {latestReview.comment}</div> : null}
         </div>
       ) : null}
+      <ContextPackagePreview task={task} onPatch={onPatch} />
       <select
         value={task.status}
         onChange={(event) => onStatus(task, event.target.value as TaskStatus)}

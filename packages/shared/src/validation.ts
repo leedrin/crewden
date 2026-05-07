@@ -124,6 +124,23 @@ export const WorkspaceErrorSchema = z.object({
   status: z.number().optional(),
 });
 
+export const ContextSectionSchema = z.object({
+  priority: z.number().int().min(1).max(5),
+  source: z.enum(['task', 'decision', 'document', 'thread_summary', 'parent_task_result']),
+  title: z.string().min(1),
+  content: z.string(),
+  tokenEstimate: z.number().int().nonnegative(),
+});
+
+export const ContextPackageSchema = z.object({
+  taskId: z.string().min(1),
+  generatedAt: z.string().min(1),
+  sections: z.array(ContextSectionSchema),
+  totalTokens: z.number().int().nonnegative(),
+  agentMaxTokens: z.number().int().positive(),
+  truncationApplied: z.boolean(),
+});
+
 export const TaskContextSchema = z.object({
   goalId: z.string().optional(),
   goalObjective: z.string().optional(),
@@ -172,6 +189,7 @@ export const TaskContextSchema = z.object({
   })).optional(),
   relatedDecisionIds: z.array(z.string().min(1)).optional(),
   relatedDocumentIds: z.array(z.string().min(1)).optional(),
+  contextPackage: ContextPackageSchema.optional(),
 }).partial();
 
 export const ProjectSchema = z.object({
