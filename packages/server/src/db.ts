@@ -8,13 +8,11 @@ import { asc, desc, eq, inArray, or } from 'drizzle-orm';
 import type { ActorType, Channel, Message, MessageIntent, MessageThread, Machine, Agent, RuntimeId, AgentStatus, AgentActivity, DirectMessage, DirectMessageThread, AgentDelegation, AgentTokenInfo, Task, TaskStatus, GoalBrief, GoalBriefStatus, GoalAlignment, GoalAlignmentStatus, Reminder, ReminderStatus, SearchMessageResult, KnowledgeEntry, KnowledgeKind, KnowledgeSearchResult, KnowledgeStatus, AgentPermissions, AgentCapability, AgentRole, Decision, DecisionStatus, Document, DocumentStatus, DocumentKind, Project, ThreadParticipant, ThreadStatus } from '@crewden/shared';
 import { classifyMessageIntent, resolveAgentReference, resolveAgents } from '@crewden/hub-core';
 import { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, decisions, directMessages, documents, goalAlignments, goals, knowledgeEntries, machines, messages, projects, reminders, tasks, threadSummaries } from './schema.js';
+import { SqliteTaskRepository, SqliteContextPackageRefRepository, type NewTask, type TaskPatch } from './repository/index.js';
 
 type Database = LibSQLDatabase<typeof import('./schema.js')>;
 const DEFAULT_PROJECT_ID = 'default';
 type NewMessage = Omit<Message, 'createdAt' | 'actorType' | 'actorId' | 'projectId'> & Partial<Pick<Message, 'actorType' | 'actorId' | 'projectId'>>;
-type NewTask = Omit<Task, 'createdAt' | 'updatedAt' | 'version' | 'type' | 'creator' | 'owner' | 'reviewer' | 'isBlocked' | 'projectId'> &
-  Partial<Pick<Task, 'type' | 'creator' | 'owner' | 'reviewer' | 'isBlocked' | 'projectId'>>;
-type TaskPatch = Partial<Pick<Task, 'status' | 'assigneeId' | 'owner' | 'reviewer' | 'acceptanceCriteria' | 'definitionOfDone' | 'constraints' | 'dependsOn' | 'isBlocked' | 'blockedReason' | 'context'>>;
 type ThreadSummary = {
   threadRootId: string;
   projectId: string;
@@ -454,6 +452,16 @@ export async function initDb(): Promise<void> {
     await database.run(`CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id)`);
     await database.run(`CREATE INDEX IF NOT EXISTS idx_audit_project ON audit_log(project_id)`);
     await database.run(`
+      CREATE TABLE IF NOT EXISTS context_package_refs (
+        task_id TEXT NOT NULL,
+        ref_type TEXT NOT NULL,
+        ref_id TEXT NOT NULL,
+        ref_updated_at TEXT NOT NULL,
+        PRIMARY KEY (task_id, ref_type, ref_id)
+      )
+    `);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_cp_refs_ref ON context_package_refs(ref_type, ref_id)`);
+    await database.run(`
       CREATE TABLE IF NOT EXISTS machines (
         id TEXT PRIMARY KEY,
         hostname TEXT NOT NULL,
@@ -667,41 +675,6 @@ function toAuditLog(row: typeof auditLogs.$inferSelect): AuditLog {
   };
 }
 
-function toTask(row: typeof tasks.$inferSelect): Task {
-  const context = row.context ? JSON.parse(row.context) as Task['context'] : undefined;
-  const ownerId = row.ownerId ?? row.assigneeId ?? undefined;
-  const reviewerId = row.reviewerId ?? context?.reviewerAgentId ?? undefined;
-  return {
-    id: row.id,
-    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
-    channelId: row.channelId,
-    messageId: row.messageId ?? undefined,
-    title: row.title,
-      status: normalizeTaskStatus(row.status),
-    type: row.type as Task['type'],
-    creatorName: row.creatorName,
-    creator: {
-      actorType: row.creatorType as ActorType,
-      actorId: row.creatorId ?? row.creatorName,
-    },
-    assigneeId: row.assigneeId ?? undefined,
-    owner: ownerId ? { actorType: (row.ownerType as ActorType | null) ?? 'agent', actorId: ownerId } : undefined,
-    reviewer: reviewerId ? { actorType: (row.reviewerType as ActorType | null) ?? 'agent', actorId: reviewerId } : undefined,
-    acceptanceCriteria: parseStringArray(row.acceptanceCriteria),
-    definitionOfDone: parseStringArray(row.definitionOfDone),
-    constraints: parseStringArray(row.constraints),
-    dependsOn: parseStringArray(row.dependsOn),
-    isBlocked: Boolean(row.isBlocked),
-    blockedReason: row.blockedReason ?? context?.blockedReason,
-    sourceChannelId: row.sourceChannelId ?? undefined,
-    sourceThreadId: row.sourceThreadId ?? undefined,
-    context,
-    version: row.version ?? 1,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
 function parseStringArray(value: string | null): string[] | undefined {
   if (!value) return undefined;
   const parsed = JSON.parse(value) as unknown;
@@ -727,12 +700,6 @@ function parseParticipants(value: string | null): ThreadParticipant[] {
 function normalizeMessageIntent(value: string | null | undefined): MessageIntent {
   if (value === 'goal' || value === 'task' || value === 'chat') return value;
   return 'chat';
-}
-
-function normalizeTaskStatus(status: string): TaskStatus {
-  if (status === 'todo') return 'backlog';
-  if (status === 'blocked') return 'in_progress';
-  return status as TaskStatus;
 }
 
 function toGoal(row: typeof goals.$inferSelect): GoalBrief {
@@ -915,6 +882,19 @@ function toMachine(row: typeof machines.$inferSelect): Machine {
 }
 
 export class SqliteStore {
+  private _taskRepo: SqliteTaskRepository | null = null;
+  private _cpRefRepo: SqliteContextPackageRefRepository | null = null;
+
+  private get taskRepo(): SqliteTaskRepository {
+    if (!this._taskRepo) this._taskRepo = new SqliteTaskRepository(getDb(), client);
+    return this._taskRepo;
+  }
+
+  private get cpRefRepo(): SqliteContextPackageRefRepository {
+    if (!this._cpRefRepo && client) this._cpRefRepo = new SqliteContextPackageRefRepository(client);
+    return this._cpRefRepo!;
+  }
+
   private async listAgentPermissionsByIds(agentIds: string[]): Promise<Map<string, AgentPermissions>> {
     if (agentIds.length === 0) return new Map();
     const rows = await getDb()
@@ -1448,107 +1428,59 @@ export class SqliteStore {
 
   async listTasks(filter: { projectId?: string; channelId?: string; status?: TaskStatus; assigneeId?: string } = {}): Promise<Task[]> {
     await initDb();
-    const rows = await getDb().select().from(tasks).orderBy(asc(tasks.createdAt));
-    return rows
-      .map(toTask)
-      .filter((task) =>
-        (!filter.projectId || task.projectId === filter.projectId) &&
-        (!filter.channelId || task.channelId === filter.channelId) &&
-        (!filter.status || task.status === filter.status) &&
-        (!filter.assigneeId || task.assigneeId === filter.assigneeId)
-      );
+    return this.taskRepo.list(filter);
   }
 
   async getTask(id: string): Promise<Task | undefined> {
     await initDb();
-    const [task] = await getDb().select().from(tasks).where(eq(tasks.id, id)).limit(1);
-    return task ? toTask(task) : undefined;
+    return this.taskRepo.getById(id);
   }
 
   async createTask(task: NewTask): Promise<Task> {
     await initDb();
-    const now = new Date().toISOString();
-    const owner = task.owner ?? (task.assigneeId ? { actorType: 'agent' as const, actorId: task.assigneeId } : undefined);
-    const created: Task = {
-      ...task,
-      projectId: task.projectId ?? DEFAULT_PROJECT_ID,
-      title: task.title.slice(0, 200),
-      status: normalizeTaskStatus(task.status),
-      type: task.type ?? 'feature',
-      creator: task.creator ?? { actorType: 'human', actorId: task.creatorName },
-      owner,
-      assigneeId: task.assigneeId ?? (owner?.actorType === 'agent' ? owner.actorId : undefined),
-      isBlocked: task.isBlocked ?? false,
-      version: 1,
-      createdAt: now,
-      updatedAt: now,
-    };
-    await getDb().insert(tasks).values({
-      ...created,
-      projectId: created.projectId,
-      messageId: created.messageId ?? null,
-      assigneeId: created.assigneeId ?? null,
-      creatorType: created.creator.actorType,
-      creatorId: created.creator.actorId,
-      ownerType: created.owner?.actorType ?? null,
-      ownerId: created.owner?.actorId ?? null,
-      reviewerType: created.reviewer?.actorType ?? null,
-      reviewerId: created.reviewer?.actorId ?? null,
-      acceptanceCriteria: created.acceptanceCriteria ? JSON.stringify(created.acceptanceCriteria) : null,
-      definitionOfDone: created.definitionOfDone ? JSON.stringify(created.definitionOfDone) : null,
-      constraints: created.constraints ? JSON.stringify(created.constraints) : null,
-      dependsOn: created.dependsOn ? JSON.stringify(created.dependsOn) : null,
-      blockedReason: created.blockedReason ?? null,
-      sourceChannelId: created.sourceChannelId ?? null,
-      sourceThreadId: created.sourceThreadId ?? null,
-      context: created.context ? JSON.stringify(created.context) : null,
-    });
-    return created;
+    return this.taskRepo.create(task);
   }
 
   async updateTask(id: string, patch: TaskPatch): Promise<Task | undefined> {
     await initDb();
-    const existing = await this.getTask(id);
-    if (!existing) return undefined;
-    const owner = patch.owner ?? (patch.assigneeId ? { actorType: 'agent' as const, actorId: patch.assigneeId } : undefined);
-    const updated: Task = {
-      ...existing,
-      ...patch,
-      status: patch.status ? normalizeTaskStatus(patch.status) : existing.status,
-      owner: owner ?? patch.owner ?? existing.owner,
-      assigneeId: patch.assigneeId ?? (owner?.actorType === 'agent' ? owner.actorId : existing.assigneeId),
-      version: existing.version + 1,
-      updatedAt: new Date().toISOString(),
-    };
-    await getDb()
-      .update(tasks)
-      .set({
-        status: updated.status,
-        assigneeId: updated.assigneeId ?? null,
-        ownerType: updated.owner?.actorType ?? null,
-        ownerId: updated.owner?.actorId ?? null,
-        reviewerType: updated.reviewer?.actorType ?? null,
-        reviewerId: updated.reviewer?.actorId ?? null,
-        acceptanceCriteria: updated.acceptanceCriteria ? JSON.stringify(updated.acceptanceCriteria) : null,
-        definitionOfDone: updated.definitionOfDone ? JSON.stringify(updated.definitionOfDone) : null,
-        constraints: updated.constraints ? JSON.stringify(updated.constraints) : null,
-        dependsOn: updated.dependsOn ? JSON.stringify(updated.dependsOn) : null,
-        isBlocked: updated.isBlocked,
-        blockedReason: updated.blockedReason ?? null,
-        context: updated.context ? JSON.stringify(updated.context) : null,
-        version: updated.version,
-        updatedAt: updated.updatedAt,
-      })
-      .where(eq(tasks.id, id));
-    return updated;
+    return this.taskRepo.update(id, patch);
   }
 
   async deleteTask(id: string): Promise<boolean> {
     await initDb();
-    const existing = await this.getTask(id);
-    if (!existing) return false;
-    await getDb().delete(tasks).where(eq(tasks.id, id));
-    return true;
+    return this.taskRepo.delete(id);
+  }
+
+  async addContextPackageRef(taskId: string, refType: string, refId: string, refUpdatedAt: string): Promise<void> {
+    await initDb();
+    if (!this.cpRefRepo) return;
+    await this.cpRefRepo.addRef(taskId, refType, refId, refUpdatedAt);
+  }
+
+  async removeContextPackageRefsForTask(taskId: string): Promise<void> {
+    await initDb();
+    if (!this.cpRefRepo) return;
+    await this.cpRefRepo.removeRefsForTask(taskId);
+  }
+
+  async findTaskIdsByRef(refType: string, refId: string): Promise<string[]> {
+    await initDb();
+    if (!this.cpRefRepo) return [];
+    return this.cpRefRepo.findTaskIdsByRef(refType, refId);
+  }
+
+  async markContextPackagesStale(refType: string, refId: string): Promise<number> {
+    await initDb();
+    const taskIds = await this.findTaskIdsByRef(refType, refId);
+    for (const taskId of taskIds) {
+      const task = await this.getTask(taskId);
+      if (task?.context?.contextPackage && !task.context.contextPackage.stale) {
+        task.context.contextPackage.stale = true;
+        task.context.contextPackage.staleReason = `${refType} updated: ${refId}`;
+        await this.updateTask(taskId, { context: task.context });
+      }
+    }
+    return taskIds.length;
   }
 
   async listGoals(filter: { projectId?: string; channelId?: string; status?: GoalBriefStatus } = {}): Promise<GoalBrief[]> {

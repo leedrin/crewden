@@ -1,13 +1,12 @@
 import { nanoid } from 'nanoid';
 import type { Agent, AgentDelegation, DirectMessage } from '@crewden/shared';
+import { isAgentActive } from '@crewden/hub-core';
 import { getStore } from './db.js';
 import { eventBus } from './events.js';
 import { buildOpenTaskSummary } from './taskDelivery.js';
 import { paseoRuntimeService } from './runtime/paseo-runtime-service.js';
 import { deliverWithRetry } from './runtime/delivery-reliability.js';
 import { isRuntimeSupported, markUnsupportedRuntime, unsupportedRuntimeError } from './runtime/runtime-support.js';
-
-const ACTIVE_STATUSES = new Set(['starting', 'running', 'working', 'idle']);
 
 export async function delegateAgent(input: {
   fromAgentId: string;
@@ -68,7 +67,7 @@ export async function delegateAgent(input: {
   });
   eventBus.emit({ type: 'dm:new', dm });
 
-  if (ACTIVE_STATUSES.has(target.status)) {
+  if (isAgentActive(target.status)) {
     if (!isRuntimeSupported(target.runtime)) {
       await markUnsupportedRuntime(target, 'delegate-delivery');
       delegation = await updateDelegation(delegation.id, 'failed', unsupportedRuntimeError(target.runtime));

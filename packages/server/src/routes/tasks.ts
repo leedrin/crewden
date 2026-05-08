@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
-import { CreateTaskRequestSchema, CreateTaskReviewRequestSchema, MessageToTaskRequestSchema, PatchTaskRequestSchema, ReviewDecisionRequestSchema, TaskStatusSchema, type ActorType, type Task, type TaskReview, type TaskStatus } from '@crewden/shared';
-import { buildContextPackage } from '@crewden/hub-core';
+import { CreateTaskRequestSchema, CreateTaskReviewRequestSchema, MessageToTaskRequestSchema, PatchTaskRequestSchema, ReviewDecisionRequestSchema, TaskStatusSchema, type ActorType, type Task, type TaskReview } from '@crewden/shared';
+import { buildContextPackage, isTaskTransitionAllowed } from '@crewden/hub-core';
 import { getStore } from '../db.js';
 import { eventBus } from '../events.js';
 import { notifyTaskAssignee, notifyTasksBlockedBy } from '../taskDelivery.js';
@@ -17,6 +17,19 @@ export async function taskRoutes(app: FastifyInstance) {
       channelId: req.query.channelId,
       status: status?.success ? status.data : undefined,
     });
+  });
+
+  app.get<{ Params: { id: string } }>('/api/tasks/:id', async (req, reply) => {
+    const store = getStore();
+    let task = await store.getTask(req.params.id);
+    if (!task) return reply.status(404).send({ error: 'Task not found' });
+    if (task.context?.contextPackage?.stale) {
+      const freshCp = await generateAndStoreContextPackage(task);
+      if (freshCp) {
+        task = (await store.getTask(task.id))!;
+      }
+    }
+    return task;
   });
 
   app.post('/api/tasks', async (req, reply) => {
@@ -323,27 +336,20 @@ async function generateAndStoreContextPackage(task: Task): Promise<import('@crew
     console.error('[ctx-pkg] buildContextPackage failed for task', task.id, ':', err);
     return undefined;
   }
+  await store.removeContextPackageRefsForTask(task.id);
+  const now = new Date().toISOString();
+  const decisionIds = task.context?.relatedDecisionIds ?? [];
+  const documentIds = task.context?.relatedDocumentIds ?? [];
+  for (const id of decisionIds) {
+    await store.addContextPackageRef(task.id, 'decision', id, now);
+  }
+  for (const id of documentIds) {
+    await store.addContextPackageRef(task.id, 'document', id, now);
+  }
   await store.updateTask(task.id, {
     context: { ...task.context, contextPackage },
   });
   return contextPackage;
-}
-
-function isTaskTransitionAllowed(from: TaskStatus, to: TaskStatus): boolean {
-  if (from === to) return true;
-  const allowed: Record<TaskStatus, TaskStatus[]> = {
-    backlog: ['spec_needed', 'ready', 'cancelled'],
-    spec_needed: ['ready', 'backlog'],
-    ready: ['assigned', 'backlog', 'cancelled'],
-    assigned: ['in_progress', 'ready', 'cancelled'],
-    in_progress: ['in_review', 'cancelled'],
-    in_review: ['changes_requested', 'qa', 'done', 'cancelled'],
-    changes_requested: ['in_progress', 'cancelled'],
-    qa: ['done', 'changes_requested', 'cancelled'],
-    done: [],
-    cancelled: [],
-  };
-  return allowed[from].includes(to);
 }
 
 function actorFromPatch(actorType: ActorType | undefined, actorId: string | undefined): { actorType: ActorType; actorId: string } | undefined {

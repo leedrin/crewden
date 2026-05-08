@@ -80,6 +80,7 @@ export async function decisionRoutes(app: FastifyInstance) {
       acceptedAt: parsed.data.status === 'accepted' ? new Date().toISOString() : existing.acceptedAt,
     });
     if (!updated) return reply.status(404).send({ error: 'Decision not found' });
+    await getStore().markContextPackagesStale('decision', updated.id);
     await getStore().appendAuditLog({
       projectId: updated.projectId,
       actorType: 'human',
@@ -98,6 +99,7 @@ export async function decisionRoutes(app: FastifyInstance) {
     if (existing.status !== 'accepted') return reply.status(422).send({ error: 'Only accepted decisions can be deprecated' });
     const updated = await getStore().updateDecision(existing.id, { status: 'deprecated' });
     if (!updated) return reply.status(404).send({ error: 'Decision not found' });
+    await getStore().markContextPackagesStale('decision', updated.id);
     await getStore().appendAuditLog({
       projectId: updated.projectId,
       actorType: 'human',
@@ -121,6 +123,7 @@ export async function decisionRoutes(app: FastifyInstance) {
     if (!replacement) return reply.status(404).send({ error: 'Superseding decision not found' });
     const updated = await getStore().updateDecision(existing.id, { status: 'superseded', supersededBy: replacement.id });
     if (!updated) return reply.status(404).send({ error: 'Decision not found' });
+    await getStore().markContextPackagesStale('decision', updated.id);
     await getStore().appendAuditLog({
       projectId: updated.projectId,
       actorType: 'human',

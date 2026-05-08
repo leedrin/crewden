@@ -95,7 +95,7 @@ import {
   ApproveDocumentRequestSchema,
   TaskStatusSchema,
 } from '@crewden/shared';
-import { buildClarifyingQuestions, buildContextPackage, findDuplicateMachineIds, inferGoalRiskLevel, recommendAgentsForGoal, resolveAgentReference, resolveAgents, resolveStartMachineId, toAgentDelivery, toRuntimeConfig } from '@crewden/hub-core';
+import { buildClarifyingQuestions, buildContextPackage, findDuplicateMachineIds, inferGoalRiskLevel, isAgentActive, isTaskTransitionAllowed, recommendAgentsForGoal, resolveAgentReference, resolveAgents, resolveStartMachineId, toAgentDelivery, toRuntimeConfig } from '@crewden/hub-core';
 
 type SocketAttachment =
   | { kind: 'browser' }
@@ -233,6 +233,9 @@ export class CrewdenHub extends DurableObject<Env> {
       }
 
       const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
+      if (taskMatch && request.method === 'GET') {
+        return await this.getSingleTask(decodeURIComponent(taskMatch[1]));
+      }
       if (taskMatch && request.method === 'PATCH') {
         return await this.patchTask(decodeURIComponent(taskMatch[1]), await request.json());
       }
@@ -1102,6 +1105,16 @@ export class CrewdenHub extends DurableObject<Env> {
       'general',
       new Date().toISOString()
     );
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS context_package_refs (
+        task_id TEXT NOT NULL,
+        ref_type TEXT NOT NULL,
+        ref_id TEXT NOT NULL,
+        ref_updated_at TEXT NOT NULL,
+        PRIMARY KEY (task_id, ref_type, ref_id)
+      )
+    `);
+    this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS idx_cp_refs_ref ON context_package_refs(ref_type, ref_id)`);
   }
 
   private createUserMessage(channelId: string, body: unknown): Response {
@@ -1356,6 +1369,7 @@ export class CrewdenHub extends DurableObject<Env> {
       acceptedAt: parsed.data.status === 'accepted' ? new Date().toISOString() : existing.acceptedAt,
     });
     if (!updated) return json({ error: 'Decision not found' }, 404);
+    this.markContextPackagesStale('decision', updated.id);
     this.appendAuditLog({
       actorType: 'human',
       actorId: 'user',
@@ -1373,6 +1387,7 @@ export class CrewdenHub extends DurableObject<Env> {
     if (existing.status !== 'accepted') return json({ error: 'Only accepted decisions can be deprecated' }, 422);
     const updated = this.updateDecision(id, { status: 'deprecated' });
     if (!updated) return json({ error: 'Decision not found' }, 404);
+    this.markContextPackagesStale('decision', updated.id);
     this.appendAuditLog({
       actorType: 'human',
       actorId: 'user',
@@ -1395,6 +1410,7 @@ export class CrewdenHub extends DurableObject<Env> {
     if (!replacement) return json({ error: 'Superseding decision not found' }, 404);
     const updated = this.updateDecision(id, { status: 'superseded', supersededBy: replacement.id });
     if (!updated) return json({ error: 'Decision not found' }, 404);
+    this.markContextPackagesStale('decision', updated.id);
     this.appendAuditLog({
       actorType: 'human',
       actorId: 'user',
@@ -1442,6 +1458,7 @@ export class CrewdenHub extends DurableObject<Env> {
     if (!existing) return json({ error: 'Document not found' }, 404);
     const updated = this.updateDocument(id, parsed.data);
     if (!updated) return json({ error: 'Document not found' }, 404);
+    this.markContextPackagesStale('document', updated.id);
     this.appendAuditLog({
       actorType: 'human',
       actorId: 'user',
@@ -1461,6 +1478,7 @@ export class CrewdenHub extends DurableObject<Env> {
     if (existing.status !== 'draft') return json({ error: 'Only draft documents can be submitted for review' }, 422);
     const updated = this.updateDocument(id, { status: 'in_review', reviewers: parsed.data.reviewers });
     if (!updated) return json({ error: 'Document not found' }, 404);
+    this.markContextPackagesStale('document', updated.id);
     this.appendAuditLog({
       actorType: 'human',
       actorId: 'user',
@@ -1482,6 +1500,7 @@ export class CrewdenHub extends DurableObject<Env> {
     if (!allowed) return json({ error: 'Approver must be in reviewers list' }, 403);
     const updated = this.updateDocument(id, { status: 'approved', approvedAt: new Date().toISOString() });
     if (!updated) return json({ error: 'Document not found' }, 404);
+    this.markContextPackagesStale('document', updated.id);
     this.appendAuditLog({
       actorType: parsed.data.actorType,
       actorId: parsed.data.actorId,
@@ -1499,6 +1518,7 @@ export class CrewdenHub extends DurableObject<Env> {
     if (existing.status !== 'approved') return json({ error: 'Only approved documents can be deprecated' }, 422);
     const updated = this.updateDocument(id, { status: 'deprecated' });
     if (!updated) return json({ error: 'Document not found' }, 404);
+    this.markContextPackagesStale('document', updated.id);
     this.appendAuditLog({
       actorType: 'human',
       actorId: 'user',
@@ -1521,6 +1541,7 @@ export class CrewdenHub extends DurableObject<Env> {
     if (!replacement) return json({ error: 'Superseding document not found' }, 404);
     const updated = this.updateDocument(id, { status: 'superseded', supersededBy: replacement.id });
     if (!updated) return json({ error: 'Document not found' }, 404);
+    this.markContextPackagesStale('document', updated.id);
     this.appendAuditLog({
       actorType: 'human',
       actorId: 'user',
@@ -3382,6 +3403,35 @@ export class CrewdenHub extends DurableObject<Env> {
     return updated;
   }
 
+  private addContextPackageRef(taskId: string, refType: string, refId: string, refUpdatedAt: string): void {
+    this.ctx.storage.sql.exec(
+      'INSERT OR REPLACE INTO context_package_refs (task_id, ref_type, ref_id, ref_updated_at) VALUES (?, ?, ?, ?)',
+      taskId, refType, refId, refUpdatedAt,
+    );
+  }
+
+  private removeContextPackageRefsForTask(taskId: string): void {
+    this.ctx.storage.sql.exec('DELETE FROM context_package_refs WHERE task_id = ?', taskId);
+  }
+
+  private findTaskIdsByRef(refType: string, refId: string): string[] {
+    const cursor = this.ctx.storage.sql.exec('SELECT task_id FROM context_package_refs WHERE ref_type = ? AND ref_id = ?', refType, refId);
+    return Array.from(cursor).map((row) => String(row.task_id));
+  }
+
+  private markContextPackagesStale(refType: string, refId: string): number {
+    const taskIds = this.findTaskIdsByRef(refType, refId);
+    for (const taskId of taskIds) {
+      const task = this.getTask(taskId);
+      if (task?.context?.contextPackage && !task.context.contextPackage.stale) {
+        task.context.contextPackage.stale = true;
+        task.context.contextPackage.staleReason = `${refType} updated: ${refId}`;
+        this.updateTask(taskId, { context: task.context });
+      }
+    }
+    return taskIds.length;
+  }
+
   private updateGoal(id: string, patch: Partial<Pick<GoalBrief, 'objective' | 'background' | 'successCriteria' | 'constraints' | 'assumptions' | 'risks' | 'status'>>): GoalBrief | undefined {
     const existing = this.getGoal(id);
     if (!existing) return undefined;
@@ -3666,7 +3716,7 @@ export class CrewdenHub extends DurableObject<Env> {
     });
     this.broadcast({ type: 'dm:new', dm });
 
-    if (['starting', 'running', 'working', 'idle'].includes(target.status) && target.machineId) {
+    if (isAgentActive(target.status) && target.machineId) {
       const sent = this.sendToDaemon(target.machineId, {
         type: 'agent:deliver',
         agentId: target.id,
@@ -3702,6 +3752,19 @@ export class CrewdenHub extends DurableObject<Env> {
     return this.updateAgentDelegation(queued, 'started');
   }
 
+  private async getSingleTask(taskId: string): Promise<Response> {
+    const task = this.getTask(taskId);
+    if (!task) return json({ error: 'Task not found' }, 404);
+    if (task.context?.contextPackage?.stale) {
+      const freshCp = await this.generateAndStoreContextPackage(task);
+      if (freshCp) {
+        const fresh = this.getTask(taskId);
+        if (fresh) return json(fresh);
+      }
+    }
+    return json(task);
+  }
+
   private async regenerateContextPackage(taskId: string): Promise<Response> {
     const task = this.getTask(taskId);
     if (!task) return json({ error: 'Task not found' }, 404);
@@ -3727,6 +3790,16 @@ export class CrewdenHub extends DurableObject<Env> {
         getAgent: async (agentId: string) => this.getAgent(agentId),
         getAgentPermissions: async () => undefined,
       });
+      this.removeContextPackageRefsForTask(task.id);
+      const now = new Date().toISOString();
+      const decisionIds = task.context?.relatedDecisionIds ?? [];
+      const documentIds = task.context?.relatedDocumentIds ?? [];
+      for (const id of decisionIds) {
+        this.addContextPackageRef(task.id, 'decision', id, now);
+      }
+      for (const id of documentIds) {
+        this.addContextPackageRef(task.id, 'document', id, now);
+      }
       this.updateTask(task.id, {
         context: { ...task.context, contextPackage: cp },
       });
@@ -3745,7 +3818,7 @@ export class CrewdenHub extends DurableObject<Env> {
     const message = toTaskDelivery(task);
     const inboxSummary = this.buildOpenTaskSummary(target);
 
-    if (['starting', 'running', 'working', 'idle'].includes(target.status) && target.machineId) {
+    if (isAgentActive(target.status) && target.machineId) {
       this.sendToDaemon(target.machineId, {
         type: 'agent:deliver',
         agentId: target.id,
@@ -4297,23 +4370,6 @@ function makeTaskReview(taskId: string, data: { requesterAgentId?: string; revie
 
 function isHighRiskTask(task: { context?: { risks?: string[] } }): boolean {
   return (task.context?.risks ?? []).some((risk) => /high|production|payment|legal|privacy|credential|高风险|上线|支付|隐私/.test(risk.toLowerCase()));
-}
-
-function isTaskTransitionAllowed(from: TaskStatus, to: TaskStatus): boolean {
-  if (from === to) return true;
-  const allowed: Record<TaskStatus, TaskStatus[]> = {
-    backlog: ['spec_needed', 'ready', 'cancelled'],
-    spec_needed: ['ready', 'backlog'],
-    ready: ['assigned', 'backlog', 'cancelled'],
-    assigned: ['in_progress', 'ready', 'cancelled'],
-    in_progress: ['in_review', 'cancelled'],
-    in_review: ['changes_requested', 'qa', 'done', 'cancelled'],
-    changes_requested: ['in_progress', 'cancelled'],
-    qa: ['done', 'changes_requested', 'cancelled'],
-    done: [],
-    cancelled: [],
-  };
-  return allowed[from].includes(to);
 }
 
 function actorFromPatch(actorType: ActorType | undefined, actorId: string | undefined): { actorType: ActorType; actorId: string } | undefined {

@@ -62,6 +62,7 @@ export async function documentRoutes(app: FastifyInstance) {
     if (!existing) return reply.status(404).send({ error: 'Document not found' });
     const updated = await getStore().updateDocument(existing.id, parsed.data);
     if (!updated) return reply.status(404).send({ error: 'Document not found' });
+    await getStore().markContextPackagesStale('document', updated.id);
     await getStore().appendAuditLog({
       projectId: updated.projectId,
       actorType: 'human',
@@ -82,6 +83,7 @@ export async function documentRoutes(app: FastifyInstance) {
     if (existing.status !== 'draft') return reply.status(422).send({ error: 'Only draft documents can be submitted for review' });
     const updated = await getStore().updateDocument(existing.id, { status: 'in_review', reviewers: parsed.data.reviewers });
     if (!updated) return reply.status(404).send({ error: 'Document not found' });
+    await getStore().markContextPackagesStale('document', updated.id);
     await getStore().appendAuditLog({
       projectId: updated.projectId,
       actorType: 'human',
@@ -105,6 +107,7 @@ export async function documentRoutes(app: FastifyInstance) {
     if (!allowed) return reply.status(403).send({ error: 'Approver must be in reviewers list' });
     const updated = await getStore().updateDocument(existing.id, { status: 'approved', approvedAt: new Date().toISOString() });
     if (!updated) return reply.status(404).send({ error: 'Document not found' });
+    await getStore().markContextPackagesStale('document', updated.id);
     await getStore().appendAuditLog({
       projectId: updated.projectId,
       actorType: parsed.data.actorType,
@@ -123,6 +126,7 @@ export async function documentRoutes(app: FastifyInstance) {
     if (existing.status !== 'approved') return reply.status(422).send({ error: 'Only approved documents can be deprecated' });
     const updated = await getStore().updateDocument(existing.id, { status: 'deprecated' });
     if (!updated) return reply.status(404).send({ error: 'Document not found' });
+    await getStore().markContextPackagesStale('document', updated.id);
     await getStore().appendAuditLog({
       projectId: updated.projectId,
       actorType: 'human',
@@ -146,6 +150,7 @@ export async function documentRoutes(app: FastifyInstance) {
     if (!replacement) return reply.status(404).send({ error: 'Superseding document not found' });
     const updated = await getStore().updateDocument(existing.id, { status: 'superseded', supersededBy: replacement.id });
     if (!updated) return reply.status(404).send({ error: 'Document not found' });
+    await getStore().markContextPackagesStale('document', updated.id);
     await getStore().appendAuditLog({
       projectId: updated.projectId,
       actorType: 'human',
