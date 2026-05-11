@@ -5,3 +5,5 @@ export { SqliteTaskRepository } from './task.repository.js';
 export { SqliteMessageRepository } from './message.repository.js';
 export { SqliteThreadRepository } from './thread.repository.js';
 export { SqliteContextPackageRefRepository } from './contextPackageRef.repository.js';
+export { SqlitePlanRepository } from './plan.repository.js';
+export { SqliteApprovalRepository } from './approval.repository.js';

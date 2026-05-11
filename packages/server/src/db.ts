@@ -7,7 +7,7 @@ import { createClient, type Client } from '@libsql/client';
 import { asc, desc, eq, inArray, or } from 'drizzle-orm';
 import type { ActorType, Channel, Message, MessageThread, Machine, Agent, RuntimeId, AgentStatus, AgentActivity, DirectMessage, DirectMessageThread, AgentDelegation, AgentTokenInfo, Task, TaskStatus, GoalBrief, GoalBriefStatus, GoalAlignment, GoalAlignmentStatus, Reminder, ReminderStatus, SearchMessageResult, KnowledgeEntry, KnowledgeKind, KnowledgeSearchResult, KnowledgeStatus, AgentPermissions, AgentCapability, AgentRole, Decision, DecisionStatus, Document, DocumentStatus, DocumentKind, Project, ThreadStatus } from '@crewden/shared';
 import { resolveAgentReference, resolveAgents } from '@crewden/hub-core';
-import { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, decisions, directMessages, documents, goalAlignments, goals, knowledgeEntries, machines, messages, projects, reminders, tasks, threadSummaries } from './schema.js';
+import { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, decisions, directMessages, documents, goalAlignments, goals, knowledgeEntries, machines, messages, projects, reminders, tasks, threadSummaries, taskPlans, approvals as approvalsTable } from './schema.js';
 import { SqliteChannelRepository, SqliteProjectRepository, SqliteTaskRepository, SqliteMessageRepository, SqliteThreadRepository, SqliteContextPackageRefRepository, type NewTask, type NewMessage, type TaskPatch, type ThreadSummaryRow } from './repository/index.js';
 
 type Database = LibSQLDatabase<typeof import('./schema.js')>;
@@ -50,7 +50,7 @@ async function ensureDbDirectory(path: string): Promise<void> {
 function createDatabase(): Database {
   const path = getDbPath();
   client = createClient({ url: getDbUrl(path) });
-  db = drizzle(client, { schema: { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, decisions, directMessages, documents, goalAlignments, goals, knowledgeEntries, machines, messages, projects, reminders, tasks, threadSummaries } });
+  db = drizzle(client, { schema: { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, decisions, directMessages, documents, goalAlignments, goals, knowledgeEntries, machines, messages, projects, reminders, tasks, threadSummaries, taskPlans, approvals: approvalsTable } });
   return db;
 }
 
@@ -457,6 +457,49 @@ export async function initDb(): Promise<void> {
         connected_at TEXT NOT NULL
       )
     `);
+    await database.run(`
+      CREATE TABLE IF NOT EXISTS task_plans (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
+        task_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        approach TEXT NOT NULL,
+        steps TEXT NOT NULL,
+        risks TEXT,
+        files_to_modify TEXT,
+        files_to_create TEXT,
+        tests_to_add TEXT,
+        author_type TEXT NOT NULL,
+        author_id TEXT NOT NULL,
+        reviewer_type TEXT,
+        reviewer_id TEXT,
+        reviewer_approved INTEGER,
+        reviewer_comment TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    await database.run(`
+      CREATE TABLE IF NOT EXISTS approvals (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
+        type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        requested_by_type TEXT NOT NULL,
+        requested_by_id TEXT NOT NULL,
+        approved_by_type TEXT,
+        approved_by_id TEXT,
+        reason TEXT NOT NULL,
+        context TEXT,
+        requested_at TEXT NOT NULL,
+        responded_at TEXT,
+        expires_at TEXT,
+        comment TEXT
+      )
+    `);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_approvals_target ON approvals(type, target_id)`);
+    await database.run(`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)`);
 
     const now = new Date().toISOString();
     await database
@@ -1779,12 +1822,14 @@ export async function resetStore(): Promise<void> {
   await database.delete(decisions);
   await database.delete(documents);
   await database.delete(threadSummaries);
-  await database.delete(agentPermissions);
-  await database.delete(agents);
-  await database.delete(machines);
-  await database.delete(channels);
-  await database.delete(projects);
-  const now = new Date().toISOString();
+   await database.delete(agentPermissions);
+   await database.delete(agents);
+   await database.delete(machines);
+   await database.delete(channels);
+   await database.delete(projects);
+   await database.delete(approvalsTable);
+   await database.delete(taskPlans);
+   const now = new Date().toISOString();
   await database.insert(projects).values({
     id: DEFAULT_PROJECT_ID,
     name: 'Default Project',

@@ -1,12 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
 import { CreateTaskRequestSchema, CreateTaskReviewRequestSchema, MessageToTaskRequestSchema, PatchTaskRequestSchema, ReviewDecisionRequestSchema, TaskStatusSchema, type ActorType, type Task, type TaskReview } from '@crewden/shared';
-import { buildContextPackage, isTaskTransitionAllowed } from '@crewden/hub-core';
+import { buildContextPackage, isTaskTransitionAllowed, checkExecutionGate, shouldCreateApprovalOnPlanApproval } from '@crewden/hub-core';
 import { getStore } from '../db.js';
 import { eventBus } from '../events.js';
 import { notifyTaskAssignee, notifyTasksBlockedBy } from '../taskDelivery.js';
 import { requireAgentPermission } from '../agentPermissions.js';
 import { resolveActingAgent } from '../requestAgentAuth.js';
+import { SqlitePlanRepository } from '../repository/plan.repository.js';
+import { SqliteApprovalRepository } from '../repository/approval.repository.js';
+import { getDb } from '../db.js';
 
 export async function taskRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { projectId?: string; channelId?: string; status?: string } }>('/api/tasks', async (req, reply) => {
@@ -106,6 +109,23 @@ export async function taskRoutes(app: FastifyInstance) {
     }
     if (patch.status && !isTaskTransitionAllowed(existing.status, patch.status)) {
       return reply.status(422).send({ error: 'Invalid task status transition', from: existing.status, to: patch.status });
+    }
+    if (patch.status === 'in_progress' && existing.status === 'assigned') {
+      const db = getDb();
+      const planRepo = new SqlitePlanRepository(db);
+      const approvalRepo = new SqliteApprovalRepository(db);
+      const plan = await planRepo.getByTaskId(existing.id);
+      const approval = plan?.status === 'approved' && shouldCreateApprovalOnPlanApproval(existing.type)
+        ? await approvalRepo.getPendingForTarget(existing.id, 'task_execution')
+        : undefined;
+      const gateResult = checkExecutionGate({
+        taskType: existing.type,
+        planStatus: plan?.status,
+        approvalStatus: approval?.status,
+      });
+      if (!gateResult.allowed) {
+        return reply.status(422).send({ error: gateResult.reason });
+      }
     }
     const { ownerType, ownerId, reviewerType, reviewerId, ...taskPatch } = patch;
     const dependencyError = await validateTaskDependencies(existing.id, taskPatch.dependsOn ?? taskPatch.context?.blockedByTaskIds);

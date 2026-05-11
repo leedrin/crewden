@@ -4,6 +4,9 @@ import type {
   AgentActivity,
   AgentDelegation,
   AgentInboxItem,
+  Approval,
+  ApprovalType,
+  ApprovalStatus,
   BrowserEvent,
   Channel,
   Decision,
@@ -25,6 +28,10 @@ import type {
   Machine,
   Message,
   Mention,
+  Plan,
+  PlanStep,
+  PlanRisk,
+  PlanStatus,
   Reminder,
   ReminderStatus,
   RuntimeId,
@@ -94,8 +101,14 @@ import {
   SubmitDocumentReviewRequestSchema,
   ApproveDocumentRequestSchema,
   TaskStatusSchema,
+  CreatePlanRequestSchema,
+  ReviewPlanRequestSchema,
+  CreateApprovalRequestSchema,
+  RespondApprovalRequestSchema,
+  PlanStatusSchema,
+  ApprovalStatusSchema,
 } from '@crewden/shared';
-import { buildClarifyingQuestions, buildContextPackage, findDuplicateMachineIds, inferGoalRiskLevel, isAgentActive, isTaskTransitionAllowed, recommendAgentsForGoal, resolveAgentReference, resolveAgents, resolveStartMachineId, toAgentDelivery, toRuntimeConfig } from '@crewden/hub-core';
+import { buildClarifyingQuestions, buildContextPackage, checkExecutionGate, findDuplicateMachineIds, inferGoalRiskLevel, isAgentActive, isTaskTransitionAllowed, recommendAgentsForGoal, resolveAgentReference, resolveAgents, resolveStartMachineId, shouldCreateApprovalOnPlanApproval, toAgentDelivery, toRuntimeConfig } from '@crewden/hub-core';
 import { SqliteTaskMessageRepository } from './repository/index.js';
 import {
   actorFromPatch,
@@ -597,6 +610,159 @@ export class CrewdenHub extends DurableObject<Env> {
 
       if (request.method === 'GET' && url.pathname === '/api/machines') {
         return json(this.listMachines());
+      }
+
+      const taskPlanMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/plan$/);
+      if (taskPlanMatch && request.method === 'GET') {
+        const taskId = decodeURIComponent(taskPlanMatch[1]);
+        const rows = this.ctx.storage.sql.exec("SELECT * FROM task_plans WHERE task_id = ?", taskId).toArray();
+        if (rows.length === 0) return json({ error: 'Plan not found' }, 404);
+        return json(this.rowToPlan(rows[0]));
+      }
+
+      if (taskPlanMatch && request.method === 'POST') {
+        const taskId = decodeURIComponent(taskPlanMatch[1]);
+        const task = this.getTask(taskId);
+        if (!task) return json({ error: 'Task not found' }, 404);
+        const existing = this.ctx.storage.sql.exec("SELECT id FROM task_plans WHERE task_id = ?", taskId).toArray();
+        if (existing.length > 0) return json({ error: 'Plan already exists for this task' }, 409);
+        const parsed = CreatePlanRequestSchema.safeParse(await request.json());
+        if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
+        const now = new Date().toISOString();
+        const planId = 'plan-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        this.ctx.storage.sql.exec(
+          "INSERT INTO task_plans (id, project_id, task_id, status, approach, steps, risks, files_to_modify, files_to_create, tests_to_add, author_type, author_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          planId,
+          parsed.data.projectId ?? 'default',
+          taskId,
+          'draft',
+          parsed.data.approach,
+          JSON.stringify(parsed.data.steps),
+          parsed.data.risks ? JSON.stringify(parsed.data.risks) : null,
+          parsed.data.filesToModify ? JSON.stringify(parsed.data.filesToModify) : null,
+          parsed.data.filesToCreate ? JSON.stringify(parsed.data.filesToCreate) : null,
+          parsed.data.testsToAdd ? JSON.stringify(parsed.data.testsToAdd) : null,
+          'human',
+          'user',
+          now,
+          now,
+        );
+        const row = this.ctx.storage.sql.exec("SELECT * FROM task_plans WHERE id = ?", planId).toArray()[0];
+        return json(this.rowToPlan(row), 201);
+      }
+
+      const taskPlanSubmitMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/plan\/submit$/);
+      if (taskPlanSubmitMatch && request.method === 'POST') {
+        const taskId = decodeURIComponent(taskPlanSubmitMatch[1]);
+        const rows = this.ctx.storage.sql.exec("SELECT * FROM task_plans WHERE task_id = ?", taskId).toArray();
+        if (rows.length === 0) return json({ error: 'Plan not found' }, 404);
+        const plan = this.rowToPlan(rows[0]);
+        if (plan.status !== 'draft') return json({ error: 'Plan must be in draft status to submit', currentStatus: plan.status }, 422);
+        const now = new Date().toISOString();
+        this.ctx.storage.sql.exec("UPDATE task_plans SET status = 'submitted', updated_at = ? WHERE id = ?", now, plan.id);
+        const updated = this.ctx.storage.sql.exec("SELECT * FROM task_plans WHERE id = ?", plan.id).toArray()[0];
+        return json(this.rowToPlan(updated));
+      }
+
+      const taskPlanReviewMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/plan\/review$/);
+      if (taskPlanReviewMatch && request.method === 'POST') {
+        const taskId = decodeURIComponent(taskPlanReviewMatch[1]);
+        const rows = this.ctx.storage.sql.exec("SELECT * FROM task_plans WHERE task_id = ?", taskId).toArray();
+        if (rows.length === 0) return json({ error: 'Plan not found' }, 404);
+        const plan = this.rowToPlan(rows[0]);
+        if (plan.status !== 'submitted') return json({ error: 'Plan must be in submitted status to review', currentStatus: plan.status }, 422);
+        const parsed = ReviewPlanRequestSchema.safeParse(await request.json());
+        if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
+        const now = new Date().toISOString();
+        const newStatus: PlanStatus = parsed.data.approved ? 'approved' : 'rejected';
+        this.ctx.storage.sql.exec(
+          "UPDATE task_plans SET status = ?, reviewer_type = 'human', reviewer_id = 'user', reviewer_approved = ?, reviewer_comment = ?, updated_at = ? WHERE id = ?",
+          newStatus,
+          parsed.data.approved ? 1 : 0,
+          parsed.data.comment ?? null,
+          now,
+          plan.id,
+        );
+        if (parsed.data.approved) {
+          const task = this.getTask(taskId);
+          if (task && shouldCreateApprovalOnPlanApproval(task.type)) {
+            const approvalId = 'approval-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+            this.ctx.storage.sql.exec(
+              "INSERT INTO approvals (id, project_id, type, target_id, status, requested_by_type, requested_by_id, reason, requested_at) VALUES (?, ?, 'task_execution', ?, 'pending', 'human', 'user', ?, ?)",
+              approvalId,
+              'default',
+              taskId,
+              `Plan approved for ${task.type} task, pending execution approval`,
+              now,
+            );
+          }
+        }
+        const updated = this.ctx.storage.sql.exec("SELECT * FROM task_plans WHERE id = ?", plan.id).toArray()[0];
+        return json(this.rowToPlan(updated));
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/approvals/pending') {
+        const rows = this.ctx.storage.sql.exec("SELECT * FROM approvals WHERE status = 'pending' ORDER BY requested_at DESC").toArray();
+        return json(rows.map((r) => this.rowToApproval(r)));
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/approvals') {
+        let sql = "SELECT * FROM approvals WHERE 1=1";
+        const params: string[] = [];
+        const targetId = url.searchParams.get('targetId');
+        if (targetId) { sql += " AND target_id = ?"; params.push(targetId); }
+        const typeFilter = url.searchParams.get('type');
+        if (typeFilter) { sql += " AND type = ?"; params.push(typeFilter); }
+        const statusFilter = url.searchParams.get('status');
+        if (statusFilter) { sql += " AND status = ?"; params.push(statusFilter); }
+        sql += " ORDER BY requested_at DESC";
+        const rows = this.ctx.storage.sql.exec(sql, ...params).toArray();
+        return json(rows.map((r) => this.rowToApproval(r)));
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/approvals') {
+        const parsed = CreateApprovalRequestSchema.safeParse(await request.json());
+        if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
+        const now = new Date().toISOString();
+        const approvalId = 'approval-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        this.ctx.storage.sql.exec(
+          "INSERT INTO approvals (id, project_id, type, target_id, status, requested_by_type, requested_by_id, reason, context, requested_at, expires_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
+          approvalId,
+          parsed.data.projectId ?? 'default',
+          parsed.data.type,
+          parsed.data.targetId,
+          'human',
+          'user',
+          parsed.data.reason,
+          parsed.data.context ?? null,
+          now,
+          parsed.data.expiresAt ?? null,
+        );
+        const row = this.ctx.storage.sql.exec("SELECT * FROM approvals WHERE id = ?", approvalId).toArray()[0];
+        return json(this.rowToApproval(row), 201);
+      }
+
+      const approvalActionMatch = url.pathname.match(/^\/api\/approvals\/([^/]+)\/(approve|reject)$/);
+      if (approvalActionMatch && request.method === 'POST') {
+        const approvalId = decodeURIComponent(approvalActionMatch[1]);
+        const action = approvalActionMatch[2];
+        const rows = this.ctx.storage.sql.exec("SELECT * FROM approvals WHERE id = ?", approvalId).toArray();
+        if (rows.length === 0) return json({ error: 'Approval not found' }, 404);
+        const approval = this.rowToApproval(rows[0]);
+        if (approval.status !== 'pending') return json({ error: 'Approval is not pending', currentStatus: approval.status }, 422);
+        const parsed = RespondApprovalRequestSchema.safeParse(await request.json());
+        if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
+        const now = new Date().toISOString();
+        const newStatus: ApprovalStatus = action === 'approve' ? 'approved' : 'rejected';
+        this.ctx.storage.sql.exec(
+          "UPDATE approvals SET status = ?, approved_by_type = 'human', approved_by_id = 'user', responded_at = ?, comment = ? WHERE id = ?",
+          newStatus,
+          now,
+          parsed.data.comment ?? null,
+          approvalId,
+        );
+        const updated = this.ctx.storage.sql.exec("SELECT * FROM approvals WHERE id = ?", approvalId).toArray()[0];
+        return json(this.rowToApproval(updated));
       }
 
       return json({ error: 'Not found' }, 404);
@@ -1131,6 +1297,49 @@ export class CrewdenHub extends DurableObject<Env> {
         connected_at TEXT NOT NULL
       )
     `);
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS task_plans (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
+        task_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        approach TEXT NOT NULL,
+        steps TEXT NOT NULL,
+        risks TEXT,
+        files_to_modify TEXT,
+        files_to_create TEXT,
+        tests_to_add TEXT,
+        author_type TEXT NOT NULL,
+        author_id TEXT NOT NULL,
+        reviewer_type TEXT,
+        reviewer_id TEXT,
+        reviewer_approved INTEGER,
+        reviewer_comment TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS approvals (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
+        type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        requested_by_type TEXT NOT NULL,
+        requested_by_id TEXT NOT NULL,
+        approved_by_type TEXT,
+        approved_by_id TEXT,
+        reason TEXT NOT NULL,
+        context TEXT,
+        requested_at TEXT NOT NULL,
+        responded_at TEXT,
+        expires_at TEXT,
+        comment TEXT
+      )
+    `);
+    this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS idx_approvals_target ON approvals(type, target_id)`);
+    this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)`);
     this.ctx.storage.sql.exec(
       'INSERT OR IGNORE INTO channels (id, name, created_at) VALUES (?, ?, ?)',
       'general',
@@ -1602,6 +1811,16 @@ export class CrewdenHub extends DurableObject<Env> {
     if (patch.status === 'in_progress') {
       const blockersError = this.validateBlockersComplete({ ...existing, ...patch });
       if (blockersError) return json({ error: blockersError }, 422);
+    }
+    if (patch.status === 'in_progress' && existing.status === 'assigned') {
+      const planRows = this.ctx.storage.sql.exec("SELECT status FROM task_plans WHERE task_id = ?", taskId).toArray();
+      if (planRows.length > 0) {
+        const planStatus = planRows[0].status as PlanStatus;
+        const approvalRows = this.ctx.storage.sql.exec("SELECT status FROM approvals WHERE target_id = ? AND type = 'task_execution' ORDER BY requested_at DESC LIMIT 1", taskId).toArray();
+        const approvalStatus = approvalRows.length > 0 ? (approvalRows[0].status as ApprovalStatus) : undefined;
+        const gateResult = checkExecutionGate({ taskType: existing.type, planStatus, approvalStatus });
+        if (!gateResult.allowed) return json({ error: gateResult.reason }, 422);
+      }
     }
     const task = this.updateTask(taskId, patch);
     if (!task) return json({ error: 'Task not found' }, 404);
@@ -2800,6 +3019,51 @@ export class CrewdenHub extends DurableObject<Env> {
 
   private listTasks(filter: { channelId?: string; status?: TaskStatus; assigneeId?: string } = {}): Task[] {
     return this.taskMessageRepo.listTasks(filter);
+  }
+
+  private rowToPlan(row: Record<string, unknown>): Plan {
+    const r = row as Record<string, string | null>;
+    return {
+      id: r.id!,
+      projectId: r.project_id ?? undefined,
+      taskId: r.task_id!,
+      status: r.status as PlanStatus,
+      approach: r.approach!,
+      steps: JSON.parse(r.steps!),
+      risks: r.risks ? JSON.parse(r.risks) : undefined,
+      filesToModify: r.files_to_modify ? JSON.parse(r.files_to_modify) : undefined,
+      filesToCreate: r.files_to_create ? JSON.parse(r.files_to_create) : undefined,
+      testsToAdd: r.tests_to_add ? JSON.parse(r.tests_to_add) : undefined,
+      authorType: r.author_type as ActorType,
+      authorId: r.author_id!,
+      reviewerType: r.reviewer_type ? (r.reviewer_type as ActorType) : undefined,
+      reviewerId: r.reviewer_id ?? undefined,
+      reviewerApproved: r.reviewer_approved !== null ? r.reviewer_approved === '1' : undefined,
+      reviewerComment: r.reviewer_comment ?? undefined,
+      createdAt: r.created_at!,
+      updatedAt: r.updated_at!,
+    };
+  }
+
+  private rowToApproval(row: Record<string, unknown>): Approval {
+    const r = row as Record<string, string | null>;
+    return {
+      id: r.id!,
+      projectId: r.project_id ?? undefined,
+      type: r.type as ApprovalType,
+      targetId: r.target_id!,
+      status: r.status as ApprovalStatus,
+      requestedByType: r.requested_by_type as ActorType,
+      requestedById: r.requested_by_id!,
+      approvedByType: r.approved_by_type ? (r.approved_by_type as ActorType) : undefined,
+      approvedById: r.approved_by_id ?? undefined,
+      reason: r.reason!,
+      context: r.context ?? undefined,
+      requestedAt: r.requested_at!,
+      respondedAt: r.responded_at ?? undefined,
+      expiresAt: r.expires_at ?? undefined,
+      comment: r.comment ?? undefined,
+    };
   }
 
   private getTask(id: string): Task | undefined {

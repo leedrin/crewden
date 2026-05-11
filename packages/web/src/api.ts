@@ -210,6 +210,50 @@ export type KnowledgeStatus = 'active' | 'stale' | 'conflict' | 'archived';
 export type KnowledgeEntry = { id: string; kind: KnowledgeKind; title: string; summary: string; body: string; tags: string[]; sourceRefs: string[]; ownerAgentId?: string; reviewerAgentId?: string; status: KnowledgeStatus; createdAt: string; updatedAt: string };
 export type KnowledgeSearchResult = { entry: KnowledgeEntry; score?: number; reason?: string };
 
+export type PlanStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
+export type PlanStep = { description: string; verification: string; estimatedTools: string[] };
+export type PlanRisk = { description: string; mitigation: string };
+export type Plan = {
+  id: string;
+  projectId?: string;
+  taskId: string;
+  status: PlanStatus;
+  approach: string;
+  steps: PlanStep[];
+  risks?: PlanRisk[];
+  filesToModify?: string[];
+  filesToCreate?: string[];
+  testsToAdd?: string[];
+  authorType: ActorType;
+  authorId: string;
+  reviewerType?: ActorType;
+  reviewerId?: string;
+  reviewerApproved?: boolean;
+  reviewerComment?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ApprovalType = 'task_execution' | 'architecture_decision' | 'pr_merge' | 'deploy_staging' | 'deploy_production';
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+export type Approval = {
+  id: string;
+  projectId?: string;
+  type: ApprovalType;
+  targetId: string;
+  status: ApprovalStatus;
+  requestedByType: ActorType;
+  requestedById: string;
+  approvedByType?: ActorType;
+  approvedById?: string;
+  reason: string;
+  context?: string;
+  requestedAt: string;
+  respondedAt?: string;
+  expiresAt?: string;
+  comment?: string;
+};
+
 export class AuthError extends Error {
   constructor(message = 'Unauthorized') {
     super(message);
@@ -558,6 +602,79 @@ export async function messageToTask(messageId: string, data: { assigneeId?: stri
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(data),
   });
+  return r.json();
+}
+
+export async function getTaskPlan(taskId: string): Promise<Plan | null> {
+  const r = await apiFetch(`${API_BASE}/api/tasks/${taskId}/plan`, { headers: authHeaders() });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Get plan failed');
+  return r.json();
+}
+
+export async function createTaskPlan(taskId: string, data: { approach: string; steps: PlanStep[]; risks?: PlanRisk[]; filesToModify?: string[]; filesToCreate?: string[]; testsToAdd?: string[] }): Promise<Plan> {
+  const r = await apiFetch(`${API_BASE}/api/tasks/${taskId}/plan`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Create plan failed');
+  return r.json();
+}
+
+export async function submitTaskPlan(taskId: string): Promise<Plan> {
+  const r = await apiFetch(`${API_BASE}/api/tasks/${taskId}/plan/submit`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Submit plan failed');
+  return r.json();
+}
+
+export async function reviewTaskPlan(taskId: string, data: { approved: boolean; comment?: string }): Promise<Plan> {
+  const r = await apiFetch(`${API_BASE}/api/tasks/${taskId}/plan/review`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Review plan failed');
+  return r.json();
+}
+
+export async function getApprovals(filter: { targetId?: string; type?: ApprovalType; status?: ApprovalStatus } = {}): Promise<Approval[]> {
+  const params = new URLSearchParams();
+  if (filter.targetId) params.set('targetId', filter.targetId);
+  if (filter.type) params.set('type', filter.type);
+  if (filter.status) params.set('status', filter.status);
+  const qs = params.toString();
+  const r = await apiFetch(`${API_BASE}/api/approvals${qs ? '?' + qs : ''}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Get approvals failed');
+  return r.json();
+}
+
+export async function getPendingApprovals(): Promise<Approval[]> {
+  const r = await apiFetch(`${API_BASE}/api/approvals/pending`, { headers: authHeaders() });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Get pending approvals failed');
+  return r.json();
+}
+
+export async function approveApproval(approvalId: string, data: { comment?: string } = {}): Promise<Approval> {
+  const r = await apiFetch(`${API_BASE}/api/approvals/${approvalId}/approve`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Approve failed');
+  return r.json();
+}
+
+export async function rejectApproval(approvalId: string, data: { comment?: string } = {}): Promise<Approval> {
+  const r = await apiFetch(`${API_BASE}/api/approvals/${approvalId}/reject`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Reject failed');
   return r.json();
 }
 

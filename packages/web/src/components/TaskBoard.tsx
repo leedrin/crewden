@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type React from 'react';
-import type { Agent, Channel, Task, TaskStatus } from '../api.js';
+import type { Agent, Channel, Task, TaskStatus, Plan, Approval } from '../api.js';
 import { createTask, deleteTask, patchTask, regenerateContextPackage } from '../api.js';
 
 type Props = {
@@ -8,6 +8,8 @@ type Props = {
   tasks: Task[];
   channels: Channel[];
   agents: Agent[];
+  plans?: Record<string, Plan>;
+  approvals?: Approval[];
   onTaskUpdated: (task: Task) => void;
   onTaskDeleted: (taskId: string) => void;
 };
@@ -49,7 +51,7 @@ const COLUMNS: Array<{ id: BoardColumnId; label: string; statuses: TaskStatus[];
   { id: 'done', label: 'Done', statuses: ['done', 'cancelled'], defaultStatus: 'done', color: '#86efac' },
 ];
 
-export function TaskBoard({ projectId, tasks, channels, agents, onTaskUpdated, onTaskDeleted }: Props) {
+export function TaskBoard({ projectId, tasks, channels, agents, plans = {}, approvals = [], onTaskUpdated, onTaskDeleted }: Props) {
   const [view, setView] = useState<'board' | 'list'>(() => (typeof window !== 'undefined' && window.innerWidth < 760 ? 'list' : 'board'));
   const [channelId, setChannelId] = useState('');
   const [title, setTitle] = useState('');
@@ -165,7 +167,7 @@ export function TaskBoard({ projectId, tasks, channels, agents, onTaskUpdated, o
                 {!isCollapsed ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {filteredTasks.map((task) => (
-                      <TaskCard key={task.id} task={task} agents={agents} channels={channels} onStatus={handleStatus} onDelete={handleDelete} onPatch={onTaskUpdated} />
+                      <TaskCard key={task.id} task={task} agents={agents} channels={channels} plan={plans[task.id]} pendingApprovals={approvals.filter(a => a.targetId === task.id && a.status === 'pending')} onStatus={handleStatus} onDelete={handleDelete} onPatch={onTaskUpdated} />
                     ))}
                   </div>
                 ) : null}
@@ -176,7 +178,7 @@ export function TaskBoard({ projectId, tasks, channels, agents, onTaskUpdated, o
       ) : (
         <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
           {visibleTasks.map((task) => (
-            <TaskCard key={task.id} task={task} agents={agents} channels={channels} onStatus={handleStatus} onDelete={handleDelete} onPatch={onTaskUpdated} compact />
+            <TaskCard key={task.id} task={task} agents={agents} channels={channels} plan={plans[task.id]} pendingApprovals={approvals.filter(a => a.targetId === task.id && a.status === 'pending')} onStatus={handleStatus} onDelete={handleDelete} onPatch={onTaskUpdated} compact />
           ))}
         </div>
       )}
@@ -241,10 +243,12 @@ function ContextPackagePreview({ task, onPatch }: { task: Task; onPatch: (task: 
   );
 }
 
-function TaskCard({ task, agents, channels, onStatus, onDelete, onPatch, compact = false }: {
+function TaskCard({ task, agents, channels, plan, pendingApprovals, onStatus, onDelete, onPatch, compact = false }: {
   task: Task;
   agents: Agent[];
   channels: Channel[];
+  plan?: Plan;
+  pendingApprovals: Approval[];
   onStatus: (task: Task, status: TaskStatus) => void;
   onDelete: (task: Task) => void;
   onPatch: (task: Task) => void;
@@ -290,6 +294,8 @@ function TaskCard({ task, agents, channels, onStatus, onDelete, onPatch, compact
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', fontSize: 11 }}>
         <Badge color={STATUS_COLORS[task.status]}>{STATUS_LABELS[task.status]}</Badge>
+        {plan ? <Badge color={plan.status === 'approved' ? '#86efac' : plan.status === 'rejected' ? '#fecaca' : plan.status === 'submitted' ? '#fde68a' : '#e5e7eb'}>PLAN:{plan.status.toUpperCase()}</Badge> : null}
+        {pendingApprovals.length > 0 ? <Badge color="#fde68a">APPROVAL:PENDING</Badge> : null}
         <span>#{channel?.name ?? task.channelId}</span>
         <span>{assignee ? `@${assignee.displayName ?? assignee.name}` : '@unassigned'}</span>
         {claimedBy ? <span style={{ fontWeight: 700 }}>CLAIMED: @{claimedBy.displayName ?? claimedBy.name}</span> : null}

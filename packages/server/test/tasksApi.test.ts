@@ -86,7 +86,7 @@ describe('task API', () => {
     const created = await app.inject({
       method: 'POST',
       url: '/api/tasks',
-      payload: { channelId: 'general', title: 'stateful task', creatorName: 'user' },
+      payload: { channelId: 'general', title: 'stateful task', creatorName: 'user', type: 'docs' },
     });
     const taskId = created.json().id;
 
@@ -190,7 +190,7 @@ describe('task API', () => {
     const created = await app.inject({
       method: 'POST',
       url: '/api/tasks',
-      payload: { channelId: 'general', title: 'audited task', creatorName: 'user', assigneeId: 'agent-1' },
+      payload: { channelId: 'general', title: 'audited task', creatorName: 'user', assigneeId: 'agent-1', type: 'docs' },
     });
     const task = created.json();
 
@@ -262,7 +262,7 @@ describe('task API', () => {
     const blocker = await app.inject({
       method: 'POST',
       url: '/api/tasks',
-      payload: { channelId: 'general', title: 'blocker', creatorName: 'user' },
+      payload: { channelId: 'general', title: 'blocker', creatorName: 'user', type: 'docs' },
     });
 
     const dependent = await app.inject({
@@ -335,7 +335,7 @@ describe('task API', () => {
     const blocker = await app.inject({
       method: 'POST',
       url: '/api/tasks',
-      payload: { channelId: 'general', title: 'blocker', creatorName: 'user' },
+      payload: { channelId: 'general', title: 'blocker', creatorName: 'user', type: 'docs' },
     });
     const dependent = await app.inject({
       method: 'POST',
@@ -455,6 +455,7 @@ describe('task API', () => {
         channelId: 'general',
         title: 'reviewable task',
         creatorName: 'user',
+        type: 'docs',
         context: { risks: ['medium'], acceptanceCriteria: ['evidence exists'] },
       },
     });
@@ -537,6 +538,7 @@ describe('task API', () => {
         channelId: 'general',
         title: 'production deploy',
         creatorName: 'user',
+        type: 'docs',
         context: { risks: ['high production risk'] },
       },
     });
@@ -568,6 +570,42 @@ describe('task API', () => {
     });
     expect(allowed.statusCode).toBe(201);
     expect((await getStore().getTask(taskId))?.context?.reviewNotes?.at(-1)).toContain('single-agent emergency drill');
+    await app.close();
+  });
+});
+
+describe('task execution gate', () => {
+  it('blocks feature task transition to in_progress without plan', async () => {
+    await resetStore();
+    const app = await buildApp();
+    const store = getStore();
+    await store.createAgent({ id: 'dev-agent', name: 'dev', runtime: 'claude', status: 'idle', createdAt: new Date().toISOString() });
+    const task = await store.createTask({ id: 'task-gate-1', channelId: 'general', title: 'Feature task', type: 'feature', status: 'backlog', assigneeId: 'dev-agent', creatorName: 'user' });
+    await store.updateTask(task.id, { status: 'assigned' });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/tasks/${task.id}`,
+      payload: { status: 'in_progress' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toContain('requires a plan');
+    await app.close();
+  });
+
+  it('allows docs task transition to in_progress without plan', async () => {
+    const app = await buildApp();
+    const store = getStore();
+    await store.createAgent({ id: 'doc-agent', name: 'docs', runtime: 'claude', status: 'idle', createdAt: new Date().toISOString() });
+    const task = await store.createTask({ id: 'task-gate-2', channelId: 'general', title: 'Docs task', type: 'docs', status: 'backlog', assigneeId: 'doc-agent', creatorName: 'user' });
+    await store.updateTask(task.id, { status: 'assigned' });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/tasks/${task.id}`,
+      payload: { status: 'in_progress' },
+    });
+    expect(res.statusCode).toBe(200);
     await app.close();
   });
 });

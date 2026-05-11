@@ -1,6 +1,7 @@
 export * from './agent.js';
 export * from './agentResolve.js';
 export * from './agentResolver.js';
+export * from './approvalRules.js';
 export * from './contextPackageBuilder.js';
 export * from './goalAlignment.js';
 export * from './intentClassifier.js';

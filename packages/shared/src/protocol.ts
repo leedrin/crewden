@@ -405,6 +405,62 @@ export type Document = {
   updatedAt: string;
 };
 
+export type PlanStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
+
+export type PlanStep = {
+  description: string;
+  verification: string;
+  estimatedTools: string[];
+};
+
+export type PlanRisk = {
+  description: string;
+  mitigation: string;
+};
+
+export type Plan = {
+  id: string;
+  projectId?: string;
+  taskId: string;
+  status: PlanStatus;
+  approach: string;
+  steps: PlanStep[];
+  risks?: PlanRisk[];
+  filesToModify?: string[];
+  filesToCreate?: string[];
+  testsToAdd?: string[];
+  authorType: ActorType;
+  authorId: string;
+  reviewerType?: ActorType;
+  reviewerId?: string;
+  reviewerApproved?: boolean;
+  reviewerComment?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ApprovalType = 'task_execution' | 'architecture_decision' | 'pr_merge' | 'deploy_staging' | 'deploy_production';
+
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+
+export type Approval = {
+  id: string;
+  projectId?: string;
+  type: ApprovalType;
+  targetId: string;
+  status: ApprovalStatus;
+  requestedByType: ActorType;
+  requestedById: string;
+  approvedByType?: ActorType;
+  approvedById?: string;
+  reason: string;
+  context?: string;
+  requestedAt: string;
+  respondedAt?: string;
+  expiresAt?: string;
+  comment?: string;
+};
+
 export type ReminderStatus = 'pending' | 'triggered' | 'cancelled';
 
 export type Reminder = {
@@ -632,5 +688,7 @@ export type BrowserEvent =
   | { type: 'goal-alignment:update'; alignment: GoalAlignment }
   | { type: 'knowledge:update'; entry: KnowledgeEntry }
   | { type: 'task:update'; task: Task }
+  | { type: 'plan:update'; plan: Plan }
+  | { type: 'approval:update'; approval: Approval }
   | { type: 'reminder:update'; reminder: Reminder }
   | { type: 'machine:update'; machine: Machine };
