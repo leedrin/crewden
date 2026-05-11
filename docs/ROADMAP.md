@@ -78,9 +78,11 @@
 | v2.0 | Polymorphic Actor + Task Contract | 统一 actor 模型，10 态状态机（5 列看板），triage 机制，基础 audit | v1.5.1 |
 | v2.1 | Agent Identity v2 | role, capabilities, permissions，Agent 匹配引擎 | v2.0 |
 | v2.2 | Decision & Document | ADR + 6 种工程文档，完整状态机 | v2.0 |
-| v2.3 | Thread Intelligence | 自动摘要，意图分类，Agent Inbox v2 | v2.0 |
+| v2.2.1 | Project 多项目隔离 | Project 对象，多项目隔离边界，侧边栏 Project Switcher | v2.2 |
+| v2.3 | Thread Intelligence | 自动摘要，意图分类，Agent Inbox v2 | v2.2.1 |
 | v2.4 | Context Package | Context Package 生成引擎，Budget 管理 | v2.3 |
-| v2.5 | Plan & Approval | Plan 审批流，Approval Gate | v2.4 |
+| v2.4.1 | Code Hardening & Context Freshness | Repository 提取、hub-core 充实、ContextPackage 失效机制 | v2.4 |
+| v2.5 | Plan & Approval | Plan 审批流，Approval Gate | v2.4.1 |
 | v2.6 | Code Execution & Review | Git 集成，分层 Review，PR-based 完成 | v2.5 |
 | v2.7 | Autopilot | 定时/事件自动触发，4 个内置模板 | v2.0 |
 | v2.8 | Knowledge Layer | 分层知识库，Task→知识沉淀，知识卫生 | v2.6 |
@@ -92,8 +94,10 @@
 - [v2.0 — Polymorphic Actor + Task Contract](./slack/v2.0-polymorphic-actor-task-contract.md)
 - [v2.1 — Agent Identity v2](./slack/v2.1-agent-identity-v2.md)
 - [v2.2 — Decision & Document](./slack/v2.2-decision-document.md)
+- [v2.2.1 — Project 多项目隔离](./slack/v2.2.1-project-isolation.md)
 - [v2.3 — Thread Intelligence](./slack/v2.3-thread-intelligence.md)
 - [v2.4 — Context Package Engine](./slack/v2.4-context-package.md)
+- [v2.4.1 — Code Hardening & Context Freshness](./slack/v2.4.1-code-hardening.md)
 - [v2.5 — Plan & Approval Gate](./slack/v2.5-plan-approval.md)
 - [v2.6 — Code Execution & Review](./slack/v2.6-code-execution-review.md)
 - [v2.7 — Autopilot Engine](./slack/v2.7-autopilot.md)

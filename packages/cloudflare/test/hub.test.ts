@@ -169,7 +169,20 @@ describe('agent internal API', () => {
 
     const taskRead = await SELF.fetch(`https://hub.test/internal/agent/${agent.id}/tasks/${task.id}`, { headers: internalHeaders });
     expect(taskRead.status).toBe(200);
-    expect(await taskRead.json()).toMatchObject({ title: task.title, context: { goal: 'cloudflare internal task' } });
+    const taskReadBody = (await taskRead.json()) as {
+      title: string;
+      context?: {
+        goal?: string;
+        contextPackage?: {
+          taskId: string;
+          generatedAt: string;
+          stale?: boolean;
+          staleReason?: string;
+        };
+      };
+    };
+    expect(taskReadBody).toMatchObject({ title: task.title, context: { goal: 'cloudflare internal task' } });
+    expect(taskReadBody.context?.contextPackage).toBeDefined();
 
     const taskUpdated = await SELF.fetch(`https://hub.test/internal/agent/${agent.id}/tasks/${task.id}/update`, {
       method: 'POST',
@@ -178,6 +191,30 @@ describe('agent internal API', () => {
     });
     expect(taskUpdated.status).toBe(200);
     expect(await taskUpdated.json()).toMatchObject({ status: 'in_progress' });
+
+    const staleMarked = await SELF.fetch(`https://hub.test/api/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        context: {
+          ...taskReadBody.context,
+          contextPackage: {
+            ...taskReadBody.context?.contextPackage,
+            stale: true,
+            staleReason: 'document updated: doc-1',
+          },
+        },
+      }),
+    });
+    expect(staleMarked.status).toBe(200);
+    const refreshedRead = await SELF.fetch(`https://hub.test/internal/agent/${agent.id}/tasks/${task.id}`, { headers: internalHeaders });
+    expect(refreshedRead.status).toBe(200);
+    const refreshedBody = (await refreshedRead.json()) as {
+      context?: { contextPackage?: { stale?: boolean; staleReason?: string; sections?: Array<unknown> } };
+    };
+    expect(refreshedBody.context?.contextPackage?.stale).not.toBe(true);
+    expect(refreshedBody.context?.contextPackage?.staleReason).toBeUndefined();
+    expect(refreshedBody.context?.contextPackage?.sections?.length ?? 0).toBeGreaterThan(0);
 
     const taskHandoff = await SELF.fetch(`https://hub.test/internal/agent/${agent.id}/tasks/${task.id}/handoff`, {
       method: 'POST',
@@ -233,7 +270,9 @@ describe('agent internal API', () => {
       body: JSON.stringify({}),
     });
     expect(claimed.status).toBe(200);
-    expect(await claimed.json()).toMatchObject({ assigneeId: agent.id, context: expect.objectContaining({ claimedByAgentId: agent.id }) });
+    const claimedBody = (await claimed.json()) as { assigneeId: string; context?: { claimedByAgentId?: string; contextPackage?: unknown } };
+    expect(claimedBody).toMatchObject({ assigneeId: agent.id, context: expect.objectContaining({ claimedByAgentId: agent.id }) });
+    expect(claimedBody.context?.contextPackage).toBeDefined();
     const messages = await SELF.fetch('https://hub.test/api/channels/general/messages', { headers: authHeaders() });
     expect(messages.status).toBe(200);
     expect(await messages.json()).toContainEqual(expect.objectContaining({
@@ -258,6 +297,25 @@ describe('agent internal API', () => {
     });
     expect(blocked.status).toBe(200);
     expect(await blocked.json()).toMatchObject({ context: expect.objectContaining({ blockedReason: 'missing input', blockedNeeds: 'user decision' }) });
+
+    const readyTaskCreated = await SELF.fetch('https://hub.test/api/tasks', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ channelId: 'general', title: `cf ready task ${crypto.randomUUID()}`, creatorName: 'user', status: 'ready' }),
+    });
+    expect(readyTaskCreated.status).toBe(201);
+    const readyTask = (await readyTaskCreated.json()) as { id: string };
+    const internalAssigned = await SELF.fetch(`https://hub.test/internal/agent/${agent.id}/tasks/${readyTask.id}/update`, {
+      method: 'POST',
+      headers: internalHeaders,
+      body: JSON.stringify({ status: 'assigned', assigneeId: agent.id }),
+    });
+    expect(internalAssigned.status).toBe(200);
+    expect(await internalAssigned.json()).toMatchObject({
+      status: 'assigned',
+      assigneeId: agent.id,
+      context: expect.objectContaining({ contextPackage: expect.any(Object) }),
+    });
 
     const reviewTaskCreated = await SELF.fetch('https://hub.test/api/tasks', {
       method: 'POST',

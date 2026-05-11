@@ -1,0 +1,43 @@
+目前仓库没有“一键安装包（.exe）”，是 Node 应用部署模式。
+所以你可以手工设路径，但还需要做下面这些。
+
+1) 打包产物在哪里
+
+Server 编译产物：/Users/lijun/Documents/crewden/packages/server/dist
+Web 编译产物：/Users/lijun/Documents/crewden/packages/web/dist
+MCP bridge：/Users/lijun/Documents/crewden/packages/paseo-client/dist/mcp-bridge/index.js
+2) Windows 机器是否要安装依赖
+要，至少需要：
+
+Node.js（建议 20+）
+pnpm（corepack enable 后可用）
+Paseo daemon（要运行在 127.0.0.1:6767 或你自定义地址）
+若要实际跑 agent，还要安装对应 runtime（claude/codex 等）
+3) 还要额外做什么（除了路径）
+
+配置环境变量（系统变量或启动脚本里）：
+PASEO_DAEMON_URL=ws://127.0.0.1:6767/ws
+CREWDEN_MCP_BRIDGE_BIN=C:\...\crewden\packages\paseo-client\dist\mcp-bridge\index.js
+CREWDEN_SERVER_URL=http://127.0.0.1:3000
+Web 生产构建时要指定 API 基址（因为 vite preview 没有 dev proxy）：
+VITE_API_BASE=http://127.0.0.1:3000
+确保端口可用：3000（server）和 5173（web preview）
+4) 如何启动（Windows/PowerShell）
+
+先安装并构建：
+
+cd C:\path\to\crewden
+pnpm install
+pnpm --filter @crewden/server build
+$env:VITE_API_BASE="http://127.0.0.1:3000"
+pnpm --filter @crewden/web build
+终端1启动 server：
+
+$env:PASEO_DAEMON_URL="ws://127.0.0.1:6767/ws"
+$env:CREWDEN_MCP_BRIDGE_BIN="C:\path\to\crewden\packages\paseo-client\dist\mcp-bridge\index.js"
+$env:CREWDEN_SERVER_URL="http://127.0.0.1:3000"
+node .\packages\server\dist\index.js
+终端2启动 web：
+
+pnpm --filter @crewden/web exec vite preview --host 0.0.0.0 --port 5173
+访问：http://localhost:5173

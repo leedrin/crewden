@@ -48,6 +48,7 @@ import {
   StartGoalAlignmentRequestSchema,
   TaskSchema,
   AgentPermissionsSchema,
+  ContextPackageSchema,
 } from '../src/validation.js';
 import { APP_VERSION, createVersionInfo } from '../src/version.js';
 
@@ -602,5 +603,61 @@ describe('version info', () => {
       commit: 'abc123',
       build: '42',
     });
+  });
+});
+
+describe('ContextPackage staleness fields', () => {
+  const baseCp = {
+    taskId: 'task-1',
+    generatedAt: new Date().toISOString(),
+    sections: [],
+    totalTokens: 0,
+    agentMaxTokens: 100000,
+    truncationApplied: false,
+  };
+
+  it('accepts ContextPackage without staleness fields', () => {
+    expect(ContextPackageSchema.safeParse(baseCp).success).toBe(true);
+  });
+
+  it('accepts ContextPackage with stale=true and staleReason', () => {
+    const result = ContextPackageSchema.safeParse({
+      ...baseCp,
+      stale: true,
+      staleReason: 'document updated: doc-1',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.stale).toBe(true);
+      expect(result.data.staleReason).toBe('document updated: doc-1');
+    }
+  });
+
+  it('accepts ContextPackage with dataSourcesUpdatedAt', () => {
+    const result = ContextPackageSchema.safeParse({
+      ...baseCp,
+      stale: false,
+      dataSourcesUpdatedAt: {
+        taskUpdatedAt: '2026-05-01T00:00:00Z',
+        decisionsUpdatedAt: '2026-05-02T00:00:00Z',
+        documentsUpdatedAt: '2026-05-03T00:00:00Z',
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.dataSourcesUpdatedAt?.taskUpdatedAt).toBe('2026-05-01T00:00:00Z');
+    }
+  });
+
+  it('accepts stale=false without staleReason', () => {
+    const result = ContextPackageSchema.safeParse({
+      ...baseCp,
+      stale: false,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.stale).toBe(false);
+      expect(result.data.staleReason).toBeUndefined();
+    }
   });
 });

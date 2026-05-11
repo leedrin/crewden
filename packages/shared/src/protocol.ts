@@ -271,6 +271,15 @@ export type ContextPackage = {
   totalTokens: number;
   agentMaxTokens: number;
   truncationApplied: boolean;
+  stale?: boolean;
+  staleReason?: string;
+  dataSourcesUpdatedAt?: {
+    taskUpdatedAt?: string;
+    decisionsUpdatedAt?: string;
+    documentsUpdatedAt?: string;
+    threadSummaryUpdatedAt?: string;
+    parentTaskUpdatedAt?: string;
+  };
 };
 
 export type TaskContext = {

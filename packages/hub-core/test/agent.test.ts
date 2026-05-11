@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, Machine } from '@crewden/shared';
 import { resetAgentStatusForRestart, resolveStartMachineId, toRuntimeConfig } from '../src/agent.js';
-import { resolveAgentReference } from '../src/agentResolve.js';
+import { resolveAgentReference, isAgentActive } from '../src/agentResolve.js';
 
 const agent: Agent = {
   id: 'agent-1',
@@ -112,5 +112,15 @@ describe('resolveAgentReference', () => {
     ]);
     expect(result.match?.id).toBe('agent-333');
     expect(result.confidence).toBe('description_hint');
+  });
+});
+
+describe('isAgentActive', () => {
+  it.each(['starting', 'running', 'working', 'idle'] as const)('returns true for active status %s', (status) => {
+    expect(isAgentActive(status)).toBe(true);
+  });
+
+  it.each(['inactive', 'error'] as const)('returns false for inactive status %s', (status) => {
+    expect(isAgentActive(status)).toBe(false);
   });
 });

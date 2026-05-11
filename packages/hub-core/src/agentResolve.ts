@@ -1,4 +1,10 @@
-import type { Agent, AgentResolveResult } from '@crewden/shared';
+import type { Agent, AgentResolveResult, AgentStatus } from '@crewden/shared';
+
+const ACTIVE_STATUSES: Set<AgentStatus> = new Set(['starting', 'running', 'working', 'idle']);
+
+export function isAgentActive(status: AgentStatus): boolean {
+  return ACTIVE_STATUSES.has(status);
+}
 
 export function resolveAgentReference(query: string, agents: Agent[]): AgentResolveResult {
   const value = query.trim();

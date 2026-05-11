@@ -20,7 +20,8 @@
 | v2.2.1 | Project 多项目隔离 | Project 对象，多项目隔离边界，所有对象归属 project，侧边栏 Project Switcher | v2.2 | Phase 1 地基 |
 | v2.3 | Thread Intelligence | Thread 摘要自动生成，消息意图分类（chat/task/goal），Agent Inbox v2 | v2.2.1 | Phase 2 |
 | v2.4 | Context Package | Context Package 生成引擎，Context Budget 管理 | v2.3 | Phase 2 |
-| v2.5 | Plan & Approval | Plan 对象 + 审批流，Approval 对象 + 完整状态机 | v2.4 | Phase 2 |
+| v2.4.1 | Code Hardening & Context Freshness | Repository 提取、hub-core 充实、ContextPackage 失效机制 | v2.4 | Phase 2 加固 |
+| v2.5 | Plan & Approval | Plan 对象 + 审批流，Approval 对象 + 完整状态机 | v2.4.1 | Phase 2 |
 | v2.6 | Code Execution | Git 集成（branch/PR via MCP），分层 Review 工作流，PR-based 任务完成 | v2.5 | Phase 3 |
 | v2.7 | Autopilot | Autopilot 引擎（schedule/webhook/event 触发），4 个内置模板 | v2.0 | Phase 3 |
 | v2.8 | Knowledge Layer | Knowledge 分层检索（agent/workspace/global），Task → knowledge 沉淀，知识卫生 | v2.6 | Phase 4 |
@@ -37,6 +38,7 @@
 - [v2.2.1 — Project 多项目隔离](./v2.2.1-project-isolation.md)
 - [v2.3 — Thread Intelligence](./v2.3-thread-intelligence.md)
 - [v2.4 — Context Package Engine](./v2.4-context-package.md)
+- [v2.4.1 — Code Hardening & Context Freshness](./v2.4.1-code-hardening.md)
 - [v2.5 — Plan & Approval Gate](./v2.5-plan-approval.md)
 - [v2.6 — Code Execution & Review](./v2.6-code-execution-review.md)
 - [v2.7 — Autopilot Engine](./v2.7-autopilot.md)

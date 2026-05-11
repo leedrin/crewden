@@ -139,6 +139,15 @@ export const ContextPackageSchema = z.object({
   totalTokens: z.number().int().nonnegative(),
   agentMaxTokens: z.number().int().positive(),
   truncationApplied: z.boolean(),
+  stale: z.boolean().optional(),
+  staleReason: z.string().optional(),
+  dataSourcesUpdatedAt: z.object({
+    taskUpdatedAt: z.string().optional(),
+    decisionsUpdatedAt: z.string().optional(),
+    documentsUpdatedAt: z.string().optional(),
+    threadSummaryUpdatedAt: z.string().optional(),
+    parentTaskUpdatedAt: z.string().optional(),
+  }).optional(),
 });
 
 export const TaskContextSchema = z.object({
