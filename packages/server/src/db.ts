@@ -5,29 +5,13 @@ import { nanoid } from 'nanoid';
 import { drizzle, type LibSQLDatabase } from 'drizzle-orm/libsql';
 import { createClient, type Client } from '@libsql/client';
 import { asc, desc, eq, inArray, or } from 'drizzle-orm';
-import type { ActorType, Channel, Message, MessageIntent, MessageThread, Machine, Agent, RuntimeId, AgentStatus, AgentActivity, DirectMessage, DirectMessageThread, AgentDelegation, AgentTokenInfo, Task, TaskStatus, GoalBrief, GoalBriefStatus, GoalAlignment, GoalAlignmentStatus, Reminder, ReminderStatus, SearchMessageResult, KnowledgeEntry, KnowledgeKind, KnowledgeSearchResult, KnowledgeStatus, AgentPermissions, AgentCapability, AgentRole, Decision, DecisionStatus, Document, DocumentStatus, DocumentKind, Project, ThreadParticipant, ThreadStatus } from '@crewden/shared';
-import { classifyMessageIntent, resolveAgentReference, resolveAgents } from '@crewden/hub-core';
+import type { ActorType, Channel, Message, MessageThread, Machine, Agent, RuntimeId, AgentStatus, AgentActivity, DirectMessage, DirectMessageThread, AgentDelegation, AgentTokenInfo, Task, TaskStatus, GoalBrief, GoalBriefStatus, GoalAlignment, GoalAlignmentStatus, Reminder, ReminderStatus, SearchMessageResult, KnowledgeEntry, KnowledgeKind, KnowledgeSearchResult, KnowledgeStatus, AgentPermissions, AgentCapability, AgentRole, Decision, DecisionStatus, Document, DocumentStatus, DocumentKind, Project, ThreadStatus } from '@crewden/shared';
+import { resolveAgentReference, resolveAgents } from '@crewden/hub-core';
 import { activities, agentDelegations, agentPermissions, agentTokens, agents, auditLogs, channels, decisions, directMessages, documents, goalAlignments, goals, knowledgeEntries, machines, messages, projects, reminders, tasks, threadSummaries } from './schema.js';
-import { SqliteTaskRepository, SqliteContextPackageRefRepository, type NewTask, type TaskPatch } from './repository/index.js';
+import { SqliteChannelRepository, SqliteProjectRepository, SqliteTaskRepository, SqliteMessageRepository, SqliteThreadRepository, SqliteContextPackageRefRepository, type NewTask, type NewMessage, type TaskPatch, type ThreadSummaryRow } from './repository/index.js';
 
 type Database = LibSQLDatabase<typeof import('./schema.js')>;
 const DEFAULT_PROJECT_ID = 'default';
-type NewMessage = Omit<Message, 'createdAt' | 'actorType' | 'actorId' | 'projectId'> & Partial<Pick<Message, 'actorType' | 'actorId' | 'projectId'>>;
-type ThreadSummary = {
-  threadRootId: string;
-  projectId: string;
-  title?: string;
-  status: ThreadStatus;
-  summaryContent?: string;
-  summaryGeneratedAt?: string;
-  linkedDecisions: string[];
-  linkedDocuments: string[];
-  linkedTasks: string[];
-  messageCount: number;
-  participants: ThreadParticipant[];
-  createdAt?: string;
-  resolvedAt?: string;
-};
 
 export type AuditLog = {
   id: string;
@@ -579,54 +563,6 @@ function toAgent(row: typeof agents.$inferSelect): Agent {
   };
 }
 
-function toMessage(row: typeof messages.$inferSelect): Message {
-  return {
-    id: row.id,
-    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
-    channelId: row.channelId,
-    senderName: row.senderName,
-    content: row.content,
-    agentId: row.agentId ?? undefined,
-    actorType: row.actorType as ActorType,
-    actorId: row.actorId ?? row.agentId ?? row.senderName,
-    threadRootId: row.threadRootId ?? undefined,
-    intent: normalizeMessageIntent(row.intent),
-    mentions: row.mentions ? JSON.parse(row.mentions) as Message['mentions'] : undefined,
-    createdAt: row.createdAt,
-  };
-}
-
-function toChannel(row: typeof channels.$inferSelect): Channel {
-  return {
-    id: row.id,
-    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
-    name: row.name,
-    createdAt: row.createdAt,
-  };
-}
-
-function toProject(row: typeof projects.$inferSelect): Project {
-  return {
-    id: row.id,
-    name: row.name,
-    slug: row.slug,
-    description: row.description,
-    paseoProjectId: row.paseoProjectId ?? undefined,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-function withThreadSummary(message: Message, allChannelMessages: Message[]): Message {
-  const replies = allChannelMessages.filter((candidate) => candidate.threadRootId === message.id);
-  if (replies.length === 0) return message;
-  return {
-    ...message,
-    replyCount: replies.length,
-    latestReplyAt: replies.at(-1)?.createdAt,
-  };
-}
-
 function toActivity(row: typeof activities.$inferSelect): AgentActivity {
   return {
     id: row.id,
@@ -679,27 +615,6 @@ function parseStringArray(value: string | null): string[] | undefined {
   if (!value) return undefined;
   const parsed = JSON.parse(value) as unknown;
   return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : undefined;
-}
-
-function parseParticipants(value: string | null): ThreadParticipant[] {
-  if (!value) return [];
-  const parsed = JSON.parse(value) as unknown;
-  if (!Array.isArray(parsed)) return [];
-  return parsed.filter(
-    (item): item is ThreadParticipant =>
-      Boolean(item) &&
-      typeof item === 'object' &&
-      (((item as ThreadParticipant).actorType === 'human') ||
-        ((item as ThreadParticipant).actorType === 'agent') ||
-        ((item as ThreadParticipant).actorType === 'system')) &&
-      typeof (item as ThreadParticipant).actorId === 'string' &&
-      (item as ThreadParticipant).actorId.length > 0,
-  );
-}
-
-function normalizeMessageIntent(value: string | null | undefined): MessageIntent {
-  if (value === 'goal' || value === 'task' || value === 'chat') return value;
-  return 'chat';
 }
 
 function toGoal(row: typeof goals.$inferSelect): GoalBrief {
@@ -835,29 +750,6 @@ function toDocument(row: typeof documents.$inferSelect): Document {
   };
 }
 
-function normalizeThreadStatus(status: string | null | undefined): ThreadStatus {
-  if (status === 'resolved' || status === 'archived') return status;
-  return 'active';
-}
-
-function toThreadSummary(row: typeof threadSummaries.$inferSelect): ThreadSummary {
-  return {
-    threadRootId: row.threadRootId,
-    projectId: row.projectId ?? DEFAULT_PROJECT_ID,
-    title: row.title ?? undefined,
-    status: normalizeThreadStatus(row.status),
-    summaryContent: row.summaryContent ?? undefined,
-    summaryGeneratedAt: row.summaryGeneratedAt ?? undefined,
-    linkedDecisions: parseStringArray(row.linkedDecisions) ?? [],
-    linkedDocuments: parseStringArray(row.linkedDocuments) ?? [],
-    linkedTasks: parseStringArray(row.linkedTasks) ?? [],
-    messageCount: row.messageCount ?? 0,
-    participants: parseParticipants(row.participants),
-    createdAt: row.createdAt ?? undefined,
-    resolvedAt: row.resolvedAt ?? undefined,
-  };
-}
-
 function scoreKnowledge(entry: KnowledgeEntry, query: string): number {
   if (!query) return 1;
   let score = 0;
@@ -882,12 +774,36 @@ function toMachine(row: typeof machines.$inferSelect): Machine {
 }
 
 export class SqliteStore {
+  private _channelRepo: SqliteChannelRepository | null = null;
+  private _projectRepo: SqliteProjectRepository | null = null;
   private _taskRepo: SqliteTaskRepository | null = null;
+  private _messageRepo: SqliteMessageRepository | null = null;
+  private _threadRepo: SqliteThreadRepository | null = null;
   private _cpRefRepo: SqliteContextPackageRefRepository | null = null;
+
+  private get channelRepo(): SqliteChannelRepository {
+    if (!this._channelRepo) this._channelRepo = new SqliteChannelRepository(getDb());
+    return this._channelRepo;
+  }
+
+  private get projectRepo(): SqliteProjectRepository {
+    if (!this._projectRepo) this._projectRepo = new SqliteProjectRepository(getDb());
+    return this._projectRepo;
+  }
 
   private get taskRepo(): SqliteTaskRepository {
     if (!this._taskRepo) this._taskRepo = new SqliteTaskRepository(getDb(), client);
     return this._taskRepo;
+  }
+
+  private get messageRepo(): SqliteMessageRepository {
+    if (!this._messageRepo) this._messageRepo = new SqliteMessageRepository(getDb());
+    return this._messageRepo;
+  }
+
+  private get threadRepo(): SqliteThreadRepository {
+    if (!this._threadRepo) this._threadRepo = new SqliteThreadRepository(getDb());
+    return this._threadRepo;
   }
 
   private get cpRefRepo(): SqliteContextPackageRefRepository {
@@ -958,306 +874,89 @@ export class SqliteStore {
 
   async listChannels(filter: { projectId?: string } = {}): Promise<Channel[]> {
     await initDb();
-    const rows = await getDb().select().from(channels).orderBy(asc(channels.createdAt));
-    return rows
-      .map(toChannel)
-      .filter((channel) => !filter.projectId || channel.projectId === filter.projectId);
+    return this.channelRepo.list(filter);
   }
 
   async getChannel(id: string, filter: { projectId?: string } = {}): Promise<Channel | undefined> {
     await initDb();
-    const [channel] = await getDb().select().from(channels).where(eq(channels.id, id)).limit(1);
-    const parsed = channel ? toChannel(channel) : undefined;
-    if (!parsed) return undefined;
-    if (filter.projectId && parsed.projectId !== filter.projectId) return undefined;
-    return parsed;
+    return this.channelRepo.getById(id, filter);
   }
 
   async createChannel(id: string, name: string, projectId = DEFAULT_PROJECT_ID): Promise<Channel> {
     await initDb();
-    const channel: Channel = { id, projectId, name, createdAt: new Date().toISOString() };
-    await getDb().insert(channels).values(channel);
-    return channel;
+    return this.channelRepo.create(id, name, projectId);
   }
 
   async deleteChannel(id: string): Promise<boolean> {
     await initDb();
-    const existing = await this.getChannel(id);
-    if (!existing) return false;
-    await getDb().delete(messages).where(eq(messages.channelId, id));
-    await getDb().delete(tasks).where(eq(tasks.channelId, id));
-    await getDb().delete(goals).where(eq(goals.channelId, id));
-    await getDb().delete(goalAlignments).where(eq(goalAlignments.channelId, id));
-    await getDb().delete(reminders).where(eq(reminders.channelId, id));
-    await getDb().delete(decisions).where(eq(decisions.channelId, id));
-    await getDb().delete(documents).where(eq(documents.sourceChannelId, id));
-    await getDb().delete(channels).where(eq(channels.id, id));
-    return true;
+    return this.channelRepo.delete(id);
   }
 
   async listProjects(): Promise<Project[]> {
     await initDb();
-    const rows = await getDb().select().from(projects).orderBy(asc(projects.createdAt));
-    return rows.map(toProject);
+    return this.projectRepo.list();
   }
 
   async getProject(id: string): Promise<Project | undefined> {
     await initDb();
-    const [row] = await getDb().select().from(projects).where(eq(projects.id, id)).limit(1);
-    return row ? toProject(row) : undefined;
+    return this.projectRepo.getById(id);
   }
 
   async getProjectBySlug(slug: string): Promise<Project | undefined> {
     await initDb();
-    const [row] = await getDb().select().from(projects).where(eq(projects.slug, slug)).limit(1);
-    return row ? toProject(row) : undefined;
+    return this.projectRepo.getBySlug(slug);
   }
 
   async createProject(input: Omit<Project, 'createdAt' | 'updatedAt'>): Promise<Project> {
     await initDb();
-    const now = new Date().toISOString();
-    const created: Project = { ...input, createdAt: now, updatedAt: now };
-    await getDb().insert(projects).values({
-      id: created.id,
-      name: created.name,
-      slug: created.slug,
-      description: created.description,
-      paseoProjectId: created.paseoProjectId ?? null,
-      createdAt: created.createdAt,
-      updatedAt: created.updatedAt,
-    });
-    return created;
+    return this.projectRepo.create(input);
   }
 
   async updateProject(id: string, patch: Partial<Omit<Project, 'id' | 'createdAt' | 'updatedAt'>>): Promise<Project | undefined> {
     await initDb();
-    const existing = await this.getProject(id);
-    if (!existing) return undefined;
-    const updated: Project = {
-      ...existing,
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    };
-    await getDb().update(projects).set({
-      name: updated.name,
-      slug: updated.slug,
-      description: updated.description,
-      paseoProjectId: updated.paseoProjectId ?? null,
-      createdAt: updated.createdAt,
-      updatedAt: updated.updatedAt,
-    }).where(eq(projects.id, id));
-    return updated;
+    return this.projectRepo.update(id, patch);
   }
 
   async deleteProject(id: string): Promise<boolean> {
     await initDb();
-    const existing = await this.getProject(id);
-    if (!existing) return false;
-    await getDb().delete(projects).where(eq(projects.id, id));
-    return true;
+    return this.projectRepo.delete(id);
   }
 
   async listMessages(channelId: string): Promise<Message[]> {
     await initDb();
-    const rows = await getDb().select().from(messages).where(eq(messages.channelId, channelId)).orderBy(asc(messages.createdAt));
-    const all = rows.map(toMessage);
-    return all.filter((message) => !message.threadRootId).map((message) => withThreadSummary(message, all));
+    return this.messageRepo.listByChannel(channelId);
   }
 
   async listRecentMessages(channelId: string, limit: number): Promise<Message[]> {
     await initDb();
-    const rows = await getDb()
-      .select()
-      .from(messages)
-      .where(eq(messages.channelId, channelId))
-      .orderBy(desc(messages.createdAt))
-      .limit(limit);
-    return rows.map(toMessage).reverse();
+    return this.messageRepo.listRecent(channelId, limit);
   }
 
   async searchMessages(query: string, limit: number, projectId?: string): Promise<SearchMessageResult[]> {
     await initDb();
-    const needle = query.toLowerCase();
-    const channelMap = new Map((await this.listChannels()).map((channel) => [channel.id, channel.name]));
-    const rows = await getDb().select().from(messages).orderBy(desc(messages.createdAt)).limit(1000);
-    return rows
-      .map(toMessage)
-      .filter((message) => !projectId || message.projectId === projectId)
-      .filter((message) => message.content.toLowerCase().includes(needle))
-      .slice(0, limit)
-      .map((message) => ({ ...message, channelName: channelMap.get(message.channelId) ?? message.channelId }));
+    return this.messageRepo.search(query, limit, projectId);
   }
 
   async createMessage(msg: NewMessage): Promise<Message> {
     await initDb();
-    const intent = msg.intent ?? classifyMessageIntent({ content: msg.content });
-    const message: Message = {
-      ...msg,
-      projectId: msg.projectId ?? DEFAULT_PROJECT_ID,
-      actorType: msg.actorType ?? (msg.agentId ? 'agent' : 'human'),
-      actorId: msg.actorId ?? msg.agentId ?? msg.senderName,
-      intent,
-      createdAt: new Date().toISOString(),
-    };
-    await getDb().insert(messages).values({
-      ...message,
-      agentId: message.agentId ?? null,
-      actorId: message.actorId,
-      threadRootId: message.threadRootId ?? null,
-      intent: message.intent ?? 'chat',
-      mentions: message.mentions ? JSON.stringify(message.mentions) : null,
-    });
-    await this.refreshThreadSummary(message.threadRootId ?? message.id);
+    const message = await this.messageRepo.create(msg);
+    await this.threadRepo.refreshSummary(message.threadRootId ?? message.id);
     return message;
   }
 
-  async getThreadSummary(rootId: string): Promise<ThreadSummary | undefined> {
+  async getThreadSummary(rootId: string): Promise<ThreadSummaryRow | undefined> {
     await initDb();
-    const [row] = await getDb().select().from(threadSummaries).where(eq(threadSummaries.threadRootId, rootId)).limit(1);
-    return row ? toThreadSummary(row) : undefined;
+    return this.threadRepo.getSummary(rootId);
   }
 
-  async setThreadStatus(rootId: string, status: ThreadStatus): Promise<ThreadSummary | undefined> {
-    return this.refreshThreadSummary(rootId, { status, forceSummary: status === 'resolved' });
-  }
-
-  private deriveThreadTitle(content: string): string {
-    const compact = content.replace(/\s+/g, ' ').trim();
-    if (!compact) return 'Thread';
-    return compact.length > 80 ? `${compact.slice(0, 77)}...` : compact;
-  }
-
-  private buildThreadSummaryContent(root: Message, replies: Message[]): string {
-    const allMessages = [root, ...replies];
-    const tail = allMessages.slice(-10);
-    const participants = Array.from(new Set(allMessages.map((message) => `${message.senderName}(${message.actorType})`)));
-    const points = tail
-      .map((message) => message.content.replace(/\s+/g, ' ').trim())
-      .filter(Boolean)
-      .slice(0, 5);
-    const decisions = tail
-      .map((message) => message.content.trim())
-      .filter((line) => /(决定|采用|结论|final|decid|will use|agreed)/i.test(line))
-      .slice(0, 3);
-    const questions = tail
-      .map((message) => message.content.trim())
-      .filter((line) => /[?？]/.test(line))
-      .slice(0, 3);
-
-    const summaryLines = [
-      `# ${this.deriveThreadTitle(root.content)}`,
-      `Participants: ${participants.join(', ') || 'n/a'}`,
-      'Key points:',
-      ...(points.length ? points.map((point) => `- ${point}`) : ['- n/a']),
-      'Decisions:',
-      ...(decisions.length ? decisions.map((line) => `- ${line}`) : ['- n/a']),
-      'Open questions:',
-      ...(questions.length ? questions.map((line) => `- ${line}`) : ['- n/a']),
-    ];
-    return summaryLines.join('\n');
-  }
-
-  private async refreshThreadSummary(
-    rootId: string,
-    options: { status?: ThreadStatus; forceSummary?: boolean } = {},
-  ): Promise<ThreadSummary | undefined> {
+  async setThreadStatus(rootId: string, status: ThreadStatus): Promise<ThreadSummaryRow | undefined> {
     await initDb();
-    const [rootRow] = await getDb().select().from(messages).where(eq(messages.id, rootId)).limit(1);
-    if (!rootRow) return undefined;
-
-    const root = toMessage(rootRow);
-    const replyRows = await getDb()
-      .select()
-      .from(messages)
-      .where(eq(messages.threadRootId, root.id))
-      .orderBy(asc(messages.createdAt));
-    const replies = replyRows.map(toMessage);
-    const now = new Date().toISOString();
-    const messageCount = 1 + replies.length;
-    const participants = Array.from(
-      new Map([root, ...replies].map((message) => [`${message.actorType}:${message.actorId}`, { actorType: message.actorType, actorId: message.actorId }])).values(),
-    );
-    const [existingRow] = await getDb().select().from(threadSummaries).where(eq(threadSummaries.threadRootId, root.id)).limit(1);
-    const existing = existingRow ? toThreadSummary(existingRow) : undefined;
-    const status = options.status ?? existing?.status ?? 'active';
-    const shouldGenerateSummary = options.forceSummary || messageCount > 10;
-    const summaryContent = shouldGenerateSummary
-      ? this.buildThreadSummaryContent(root, replies)
-      : existing?.summaryContent;
-    const summaryGeneratedAt = shouldGenerateSummary ? now : existing?.summaryGeneratedAt;
-    const resolvedAt = status === 'resolved'
-      ? (existing?.resolvedAt ?? now)
-      : (options.status === 'active' ? undefined : existing?.resolvedAt);
-
-    const linkedDecisionRows = await getDb().select({ id: decisions.id }).from(decisions).where(eq(decisions.sourceThreadId, root.id));
-    const linkedDocumentRows = await getDb().select({ id: documents.id }).from(documents).where(eq(documents.sourceThreadId, root.id));
-    const linkedTaskRows = await getDb()
-      .select({ id: tasks.id })
-      .from(tasks)
-      .where(or(eq(tasks.sourceThreadId, root.id), eq(tasks.messageId, root.id)));
-
-    const payload: ThreadSummary = {
-      threadRootId: root.id,
-      projectId: root.projectId ?? DEFAULT_PROJECT_ID,
-      title: existing?.title ?? this.deriveThreadTitle(root.content),
-      status,
-      summaryContent,
-      summaryGeneratedAt,
-      linkedDecisions: linkedDecisionRows.map((row) => row.id),
-      linkedDocuments: linkedDocumentRows.map((row) => row.id),
-      linkedTasks: linkedTaskRows.map((row) => row.id),
-      messageCount,
-      participants,
-      createdAt: existing?.createdAt ?? root.createdAt,
-      resolvedAt,
-    };
-
-    if (existingRow) {
-      await getDb().update(threadSummaries).set({
-        projectId: payload.projectId,
-        title: payload.title ?? null,
-        status: payload.status,
-        summaryContent: payload.summaryContent ?? null,
-        summaryGeneratedAt: payload.summaryGeneratedAt ?? null,
-        linkedDecisions: JSON.stringify(payload.linkedDecisions),
-        linkedDocuments: JSON.stringify(payload.linkedDocuments),
-        linkedTasks: JSON.stringify(payload.linkedTasks),
-        messageCount: payload.messageCount,
-        participants: JSON.stringify(payload.participants),
-        createdAt: payload.createdAt ?? null,
-        resolvedAt: payload.resolvedAt ?? null,
-      }).where(eq(threadSummaries.threadRootId, root.id));
-    } else {
-      await getDb().insert(threadSummaries).values({
-        threadRootId: payload.threadRootId,
-        projectId: payload.projectId,
-        title: payload.title ?? null,
-        status: payload.status,
-        summaryContent: payload.summaryContent ?? null,
-        summaryGeneratedAt: payload.summaryGeneratedAt ?? null,
-        linkedDecisions: JSON.stringify(payload.linkedDecisions),
-        linkedDocuments: JSON.stringify(payload.linkedDocuments),
-        linkedTasks: JSON.stringify(payload.linkedTasks),
-        messageCount: payload.messageCount,
-        participants: JSON.stringify(payload.participants),
-        createdAt: payload.createdAt ?? null,
-        resolvedAt: payload.resolvedAt ?? null,
-      });
-    }
-
-    return payload;
+    return this.threadRepo.setThreadStatus(rootId, status);
   }
 
   async appendMessageContent(id: string, appendText: string): Promise<Message | undefined> {
     await initDb();
-    if (!appendText) return this.getMessage(id);
-    const [existing] = await getDb().select().from(messages).where(eq(messages.id, id)).limit(1);
-    if (!existing) return undefined;
-    const nextContent = `${existing.content}${appendText}`;
-    await getDb().update(messages).set({ content: nextContent }).where(eq(messages.id, id));
-    const [updated] = await getDb().select().from(messages).where(eq(messages.id, id)).limit(1);
-    if (!updated) return undefined;
-    return toMessage(updated);
+    return this.messageRepo.appendContent(id, appendText);
   }
 
   async addMessage(msg: NewMessage): Promise<Message> {
@@ -1301,49 +1000,12 @@ export class SqliteStore {
 
   async getMessage(id: string): Promise<Message | undefined> {
     await initDb();
-    const [message] = await getDb().select().from(messages).where(eq(messages.id, id)).limit(1);
-    if (!message) return undefined;
-    const parsed = toMessage(message);
-    if (parsed.threadRootId) return parsed;
-    const channelMessages = (await getDb().select().from(messages).where(eq(messages.channelId, parsed.channelId)).orderBy(asc(messages.createdAt))).map(toMessage);
-    return withThreadSummary(parsed, channelMessages);
+    return this.messageRepo.getById(id);
   }
 
   async getThread(rootId: string): Promise<MessageThread | undefined> {
     await initDb();
-    const [rootRow] = await getDb().select().from(messages).where(eq(messages.id, rootId)).limit(1);
-    if (!rootRow) return undefined;
-    const root = toMessage(rootRow);
-    const threadRootId = root.threadRootId ?? root.id;
-    const [actualRootRow] = await getDb().select().from(messages).where(eq(messages.id, threadRootId)).limit(1);
-    if (!actualRootRow) return undefined;
-    const actualRoot = toMessage(actualRootRow);
-    const replyRows = await getDb()
-      .select()
-      .from(messages)
-      .where(eq(messages.threadRootId, actualRoot.id))
-      .orderBy(asc(messages.createdAt));
-    const replies = replyRows.map(toMessage);
-    const linkedDecisions = (await getDb().select().from(decisions).where(eq(decisions.sourceThreadId, actualRoot.id)))
-      .map(toDecision)
-      .filter((decision) => decision.projectId === actualRoot.projectId);
-    const linkedDocuments = (await getDb().select().from(documents).where(eq(documents.sourceThreadId, actualRoot.id)))
-      .map(toDocument)
-      .filter((document) => document.projectId === actualRoot.projectId);
-    const summary = await this.refreshThreadSummary(actualRoot.id);
-    return {
-      root: withThreadSummary(actualRoot, [actualRoot, ...replies]),
-      replies,
-      title: summary?.title,
-      status: summary?.status ?? 'active',
-      summaryContent: summary?.summaryContent,
-      summaryGeneratedAt: summary?.summaryGeneratedAt,
-      messageCount: summary?.messageCount ?? (1 + replies.length),
-      participants: summary?.participants ?? [],
-      resolvedAt: summary?.resolvedAt,
-      linkedDecisions,
-      linkedDocuments,
-    };
+    return this.threadRepo.getThread(rootId);
   }
 
   async createDirectMessage(dm: Omit<DirectMessage, 'createdAt'>): Promise<DirectMessage> {

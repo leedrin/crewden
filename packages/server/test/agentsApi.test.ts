@@ -872,6 +872,7 @@ describe('agent internal API', () => {
     expect(claimed.statusCode).toBe(200);
     expect(claimed.json()).toMatchObject({ assigneeId: 'agent-1', status: 'assigned', context: { claimedByAgentId: 'agent-1' } });
     expect(claimed.json().context.progressEvents.at(-1)).toMatchObject({ type: 'claimed', agentId: 'agent-1' });
+    expect(claimed.json().context.contextPackage).toBeDefined();
     expect(await store.listMessages('general')).toContainEqual(expect.objectContaining({
       senderName: 'Bot',
       agentId: 'agent-1',
@@ -905,6 +906,69 @@ describe('agent internal API', () => {
     });
     expect(escalated.statusCode).toBe(200);
     expect(escalated.json().context).toMatchObject({ escalatedReason: 'blocked after retry' });
+    await app.close();
+  });
+
+  it('builds and refreshes context package on internal task flows', async () => {
+    const { app, store, headers } = await createInternalAgent();
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/agent-1/tasks/create',
+      headers,
+      payload: {
+        channel: 'general',
+        title: 'internal assigned task',
+        status: 'assigned',
+        assigneeId: 'agent-1',
+        creatorName: 'Bot',
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().context?.contextPackage).toBeDefined();
+
+    const createdTaskId = created.json().id as string;
+    const staleTask = await store.getTask(createdTaskId);
+    expect(staleTask).toBeDefined();
+    await store.updateTask(createdTaskId, {
+      context: {
+        ...staleTask!.context,
+        contextPackage: {
+          ...staleTask!.context?.contextPackage!,
+          stale: true,
+          staleReason: 'document updated: doc-1',
+        },
+      },
+    });
+
+    const refreshed = await app.inject({
+      method: 'GET',
+      url: `/internal/agent/agent-1/tasks/${createdTaskId}`,
+      headers,
+    });
+    expect(refreshed.statusCode).toBe(200);
+    expect(refreshed.json().context?.contextPackage?.stale).not.toBe(true);
+    expect(refreshed.json().context?.contextPackage?.staleReason).toBeUndefined();
+    expect(refreshed.json().context?.contextPackage?.sections?.length ?? 0).toBeGreaterThan(0);
+
+    const readyTask = await store.createTask({
+      id: 'task-ready-internal',
+      channelId: 'general',
+      title: 'ready task',
+      status: 'ready',
+      creatorName: 'user',
+      isBlocked: false,
+    });
+    const updated = await app.inject({
+      method: 'POST',
+      url: `/internal/agent/agent-1/tasks/${readyTask.id}/update`,
+      headers,
+      payload: { status: 'assigned', assigneeId: 'agent-1' },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().status).toBe('assigned');
+    expect(updated.json().context?.contextPackage).toBeDefined();
+
     await app.close();
   });
 

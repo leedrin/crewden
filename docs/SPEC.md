@@ -1,71 +1,78 @@
-# Crewden — Spec Doc
+# Crewden — Spec Doc (v2.x)
 
-> 本文档是项目的长期规格说明，记录系统设计、协议约定、开发规范和迭代路线图。所有重大变更应同步更新此文档。
+> 本文档是项目的长期规格说明，记录系统设计、协议约定、开发规范和迭代路线。v2.x 以「Slack-like 面向 AI Agent 的协作式研发操作系统」为目标，基于 Paseo Runtime 单栈基座。
+>
+> 详细设计见：[Slack-like AI Agent 协作式研发操作系统完整设计](./slack/SLACK_LIKE_AI_AGENT_DESIGN.md)
+> 功能 PRD：[AI Agent 协作式研发操作系统 PRD](./slack/SLACK_LIKE_AI_AGENT_PRD.md)
+> 迭代路线：[ROADMAP.md](./ROADMAP.md) / [ROADMAP_V2.md](./slack/ROADMAP_V2.md)
 
 ---
 
 ## 1. 项目概述
 
-**Crewden** 是一个自托管的 AI Agent 协作工作台，类似 Slack + AI agents 的协作产品。用户可以在 Web 界面创建和管理 AI Agent，通过聊天频道与 Agent 交互。Agent 在本地机器上以 CLI 进程方式运行，支持 Claude Code、Codex CLI、Gemini CLI 三种 runtime。
+**Crewden** 是一个自托管的 AI Agent 协作工作台，类似 Slack + AI agents 的协作产品。用户可以在 Web 界面创建和管理 AI Agent，通过聊天频道与 Agent 交互。Agent 通过 Paseo Daemon 持久会话运行，支持 Claude Code、Codex CLI、Gemini CLI、Pi 等多种 runtime。
 
 **核心价值：**
 - 完全自托管，数据不出本地
-- 支持多种 AI runtime，统一交互界面
-- 轻量级架构，无数据库依赖（MVP）
-- 像素风 UI，工具感强
+- Paseo Runtime 持久会话 + Turn-based 执行
+- Cloudflare Worker + Durable Object 生产部署
+- Agent 角色/权限/能力体系
+- Task Board + 10 态状态机执行追踪
 
-### 1.1 Phase Two Product Direction
+### 1.1 v2.x 产品方向
 
-v1.x 阶段的产品目标是从“Agent 协作工作台”升级为围绕目标运转的 Agent 协作系统。系统不复制复杂的人类组织架构，而是让一组 Agent 基于轻量角色、职责能力、目标上下文和知识记忆持续协作。
+从 v1.x "Agent 协作工作台"升级为 v2.x **"Slack-like 面向 Agent 的协作式研发操作系统"**。7 层架构：协作层 → 对话引擎 → 编排器 → Runtime + Task Engine → MCP 工具 → 审计 → 审批。
 
-第二阶段的详细路线图见 [v1.x — Phase Two Roadmap: Role, Goal & Memory](./v1-phase-two-roadmap.md)。所有 v1.x 设计应遵循以下方向：
+核心闭环：`讨论 → 文档 → 任务 → 执行 → Review → 合并 → 沉淀`
 
-- 目标从聊天中自然产生：用户仍在当前聊天里表达目标，系统负责澄清、拆解、分工和验收。
-- 信息传递默认结构化：handoff 必须携带背景、事实、决策、验收标准、风险、证据和下一步。
-- Agent 有轻量角色画像：职责、能力、工作风格、交接偏好和边界是一等概念；部门、汇报线和组织图不是 v1.0 重点。
-- 自主性来自产品机制：inbox、claim、handoff、escalation、review 和 evidence 要进入系统模型。
-- 知识层是核心能力：项目档案、决策、经验和外部知识库 adapter 应逐步支撑 Agent 复用上下文。
+详细设计原则和数据模型见 [v2.x 完整设计方案](./slack/SLACK_LIKE_AI_AGENT_DESIGN.md)。
 
 ---
 
 ## 2. 系统架构
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Browser (React + Vite :5173)                       │
-│  - Sidebar: channels / agents / machines            │
-│  - ChannelView: 消息列表（像素风头像，消息分组）        │
-│  - AgentPanel: 创建/启停 agent                       │
-│  - Composer: 消息输入（IME 安全，像素风按钮）           │
-└──────────────┬──────────────────────────────────────┘
-               │ HTTP REST + WebSocket (/ws)
+┌─────────────────────────────────────────────────────────────┐
+│  Browser (React + Vite :5173)                               │
+│  - Sidebar: Channels / Agents / Tasks / Inbox / Knowledge   │
+│  - ChannelView: 消息列表 / Thread 面板                      │
+│  - TaskBoard: 5 列 Kanban 看板                              │
+│  - Agent Panel / Decision / Document / Project Switcher     │
+└──────────────┬──────────────────────────────────────────────┘
+               │ HTTP REST + WebSocket
                ▼
-┌─────────────────────────────────────────────────────┐
-│  Server (Fastify + Node.js :3000)                   │
-│  - 内存 Store: channels / messages / agents / machines│
-│  - REST API: /api/channels, /api/agents, /api/machines│
-│  - Daemon WebSocket: /daemon/connect?key=...        │
-│  - Browser WebSocket: /ws (push 实时事件)            │
-└──────────────┬──────────────────────────────────────┘
-               │ WebSocket (daemon protocol)
+┌─────────────────────────────────────────────────────────────┐
+│  Cloudflare Worker (crewden-hub)        ← 生产环境           │
+│  - Durable Object + SQLite：所有持久化数据                   │
+│  - REST API：channels / tasks / agents / threads / ...      │
+│  - WebSocket：实时 push 消息/状态变更                        │
+│  - Autopilot：Durable Object Alarm 定时触发                  │
+└──────────────┬──────────────────────────────────────────────┘
+               │
+┌──────────────┴──────────────────────────────────────────────┐
+│  Node.js Server (Fastify :3000)        ← 本地开发/混合部署   │
+│  - SQLite (libsql + Drizzle ORM)：本地开发存储               │
+│  - Repository 层：数据访问抽象                               │
+│  - REST + WebSocket API（与 Cloudflare 对等）                │
+│  - Paseo Client：连接 Paseo Daemon，管理 Agent 生命周期       │
+└──────────────┬──────────────────────────────────────────────┘
+               │ WebSocket (Paseo Protocol)
                ▼
-┌─────────────────────────────────────────────────────┐
-│  Daemon (Node.js)                                   │
-│  - Runtime 探测: claude / codex / gemini            │
-│  - AgentProcessManager: 每条消息 spawn 一个 CLI 进程  │
-│  - 驱动层: claude.ts / codex.ts / gemini.ts         │
-│  - Bridge 解析: [[CREWDEN_SEND_MESSAGE]] 协议     │
-│  - Fallback: 无 bridge marker 时发送完整 stdout       │
-└──────────────┬──────────────────────────────────────┘
-               │ spawn child_process
-               ▼
-┌─────────────────────────────────────────────────────┐
-│  CLI Agents                                         │
-│  claude -p <msg> --system-prompt <sp> --output-format text │
-│  codex exec <msg> --skip-git-repo-check -c system_prompt=... │
-│  gemini -p <msg> --output-format text -y            │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  Paseo Daemon                                               │
+│  - Agent 持久会话（Turn-based 执行）                         │
+│  - Context Injection：每个 turn 注入 Context Package         │
+│  - MCP Bridge：tools 暴露为 crewden_* 工具                   │
+│  - Runtime 适配：claude / codex / gemini / pi               │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+### 2.1 数据流决策
+
+1. **Cloudflare 是生产单一数据源** — 所有持久化读写走 Cloudflare Worker → Durable Object SQLite
+2. **Server 本地 SQLite** — 仅用于开发/本地模式，不与 Cloudflare 双向同步
+3. **Web 是纯前端 SPA** — 不依赖任何 `@crewden/*` 运行时包，通过 HTTP/WS 通信
+4. **消息推送链路**：Agent → Paseo Daemon → Paseo Client → Server → Cloudflare → Web
 
 ---
 
@@ -73,89 +80,183 @@ v1.x 阶段的产品目标是从“Agent 协作工作台”升级为围绕目标
 
 ```
 crewden/
-├── package.json              # root scripts: dev, daemon, test, verify
+├── package.json                 # root scripts: dev, verify
 ├── pnpm-workspace.yaml
 ├── tsconfig.base.json
-├── start.sh                  # 一键启动脚本
-├── README.md                 # 用户文档
-├── SPEC.md                   # 本文档
+├── AGENTS.md                    # Agent 开发规则
+├── windows.txt                  # Windows 一键启动脚本
 ├── .env.example
+├── docs/
+│   ├── SPEC.md                  # 本文档
+│   ├── ROADMAP.md               # 长期迭代路线
+│   ├── architecture-analysis.md # 架构评审报告
+│   ├── for_coding_agent/        # coding-agent 交接笔记
+│   └── slack/                   # v2.x 设计文档 / 各版本实现计划
 ├── scripts/
 │   └── verify.ts
 └── packages/
-    ├── shared/               # @crewden/shared
+    ├── shared/                  # @crewden/shared
     │   └── src/
-    │       ├── protocol.ts   # TypeScript 类型定义
-    │       └── validation.ts # Zod schema
-    ├── server/               # @crewden/server
+    │       ├── protocol.ts      # 全部 TypeScript 类型定义
+    │       ├── validation.ts    # Zod schema（与 protocol.ts 同步）
+    │       └── version.ts       # 共享版本号
+    ├── hub-core/                # @crewden/hub-core
     │   └── src/
-    │       ├── app.ts
-    │       ├── db.ts         # 内存 Store
-    │       ├── events.ts     # 事件总线
-    │       ├── daemonRegistry.ts
-    │       ├── routes/       # agents, channels, messages, machines
-    │       └── ws/           # daemonSocket, browserSocket
-    ├── daemon/               # @crewden/daemon
+    │       ├── agentResolver.ts # Agent 角色/能力匹配
+    │       ├── intentClassifier.ts  # 消息意图分类（chat/task/goal）
+    │       ├── goalAlignment.ts # 目标对齐
+    │       ├── taskStateMachine.ts  # V2 10 态状态机校验
+    │       └── contextPackageBuilder.ts  # Context Package 构建引擎
+    ├── paseo-client/            # @crewden/paseo-client
     │   └── src/
-    │       ├── cli.ts
-    │       ├── daemonClient.ts
-    │       ├── runtimeDetector.ts
-    │       ├── agentProcessManager.ts
-    │       ├── bridge/
-    │       │   └── simpleToolBridge.ts
-    │       └── drivers/
-    │           ├── types.ts
-    │           ├── claude.ts
-    │           ├── codex.ts
-    │           └── gemini.ts
-    └── web/                  # @crewden/web
+    │       ├── paseo-daemon-client.ts  # Paseo WebSocket 协议
+    │       ├── inbox-adapter.ts        # Inbox 适配器
+    │       └── mcp-bridge/             # MCP 工具桥接
+    ├── server/                  # @crewden/server
+    │   └── src/
+    │       ├── app.ts           # Fastify 启动
+    │       ├── db.ts            # 数据库连接 + Store（Drizzle ORM）
+    │       ├── schema.ts        # Drizzle schema 定义
+    │       ├── events.ts        # 事件总线
+    │       ├── repository/      # Repository 层（数据访问抽象）
+    │       │   ├── types.ts
+    │       │   ├── task.repository.ts
+    │       │   ├── channel.repository.ts
+    │       │   ├── message.repository.ts
+    │       │   ├── thread.repository.ts
+    │       │   ├── project.repository.ts
+    │       │   └── contextPackageRef.repository.ts
+    │       ├── routes/          # REST 路由
+    │       │   ├── agents.ts / channels.ts / tasks.ts
+    │       │   ├── threads.ts / messages.ts
+    │       │   ├── decisions.ts / documents.ts
+    │       │   ├── projects.ts / goals.ts / knowledge.ts
+    │       │   ├── internalAgent.ts / machines.ts / audit.ts
+    │       │   └── runtime.ts
+    │       ├── runtime/         # Paseo 运行时集成
+    │       │   ├── paseo-runtime-service.ts
+    │       │   ├── delivery.ts / delivery-reliability.ts
+    │       │   └── runtime-instance-mapper.ts
+    │       └── ws/
+    │           └── browserSocket.ts
+    ├── cloudflare/              # @crewden/cloudflare
+    │   └── src/
+    │       ├── index.ts         # Worker 入口（路由 + DO 绑定）
+    │       └── model.ts         # 数据模型
+    └── web/                     # @crewden/web
         └── src/
-            ├── App.tsx
-            ├── api.ts
-            ├── pixel.css     # 像素风全局样式 token
+            ├── App.tsx          # 主应用
+            ├── api.ts           # HTTP/WS API 调用（独立维护类型）
             └── components/
-                ├── Sidebar.tsx
-                ├── ChannelView.tsx
-                ├── Composer.tsx
-                ├── AgentPanel.tsx
-                └── MachinePanel.tsx
+                ├── Sidebar.tsx  / ChannelView.tsx / Composer.tsx
+                ├── TaskBoard.tsx / ThreadPanel.tsx
+                ├── AgentPanel.tsx / AgentDetailPanel.tsx
+                ├── KnowledgePanel.tsx / InboxPanel.tsx
+                ├── DecisionPanel.tsx / DocumentPanel.tsx
+                └── ProjectSwitcher.tsx
 ```
 
 ---
 
-## 4. 协议规范
+## 4. 核心数据模型
 
-### 4.1 Daemon ↔ Server WebSocket 协议
+### 4.1 所有对象使用 Polymorphic Actor
 
-连接端点：`ws://localhost:3000/daemon/connect?key=<api-key>`
-
-**Daemon → Server：**
+所有创建者/拥有者/审核者字段使用 `actorType` + `actorId` 替代旧版纯字符串：
 
 ```ts
-type DaemonToServer =
-  | { type: 'ready'; hostname: string; os: string; daemonVersion: string;
-      runtimes: RuntimeId[]; runtimeVersions: Record<string, string>;
-      runningAgents: string[]; capabilities: string[] }
-  | { type: 'pong' }
-  | { type: 'agent:status'; agentId: string; status: AgentStatus; launchId?: string }
-  | { type: 'agent:message'; agentId: string; channelId: string; content: string }
-  | { type: 'agent:deliver:ack'; agentId: string; seq: number };
+type ActorRef = { actorType: 'human' | 'agent' | 'system'; actorId: string };
 ```
 
-**Server → Daemon：**
+### 4.2 对象模型
 
-```ts
-type ServerToDaemon =
-  | { type: 'ping' }
-  | { type: 'agent:start'; agentId: string; config: AgentRuntimeConfig; launchId: string; wakeMessage?: AgentDelivery }
-  | { type: 'agent:stop'; agentId: string }
-  | { type: 'agent:deliver'; agentId: string; seq: number; message: AgentDelivery;
-      config?: AgentRuntimeConfig; channelId?: string };  // config 用于 daemon 重启后自动恢复
+| 对象 | 说明 | 事实源 | 状态 |
+|---|---|---|---|
+| Channel | 按项目隔离的讨论空间 | DB | — |
+| Thread | 聚焦讨论的线程上下文 | DB | open / resolved |
+| Message | 消息（带 actorType + intent 分类） | DB | — |
+| Agent | 有角色/职责/权限/能力标签的团队成员 | DB | online / offline / working |
+| Project | 多项目隔离边界 | DB | — |
+| Task | 10 态执行契约（5 列看板映射） | Task Board | backlog → … → done |
+| Decision | ADR 架构决策记录 | Docs | proposed → accepted → deprecated |
+| Document | 6 种工程文档 | Docs | draft → in_review → approved → deprecated |
+| Plan | Agent 执行前 Implementation Plan | Task Context | draft → submitted → approved → rejected |
+| Approval | 高风险操作审批节点 | Audit | pending → approved → rejected → expired |
+| ContextPackage | Agent 执行前生成的上下文包 | Task Context | — |
+| AuditLog | 结构化审计记录 | Audit | — |
+
+### 4.3 Task 10 态状态机
+
+```
+backlog → spec_needed → ready → assigned → in_progress
+                                           → in_review
+                                           → changes_requested → in_progress
+                                           → qa → done
+  任意状态 → cancelled
 ```
 
-### 4.2 Browser ↔ Server WebSocket 协议
+5 列看板映射：
 
-连接端点：`ws://localhost:3000/ws`
+| 看板列 | 包含状态 |
+|---|---|
+| Backlog | backlog, spec_needed |
+| Todo | ready, assigned |
+| In Progress | in_progress |
+| Review | in_review, changes_requested, qa |
+| Done | done |
+
+---
+
+## 5. 协议规范
+
+### 5.1 REST API（Server / Cloudflare 对等）
+
+```
+# Channels
+GET    /api/channels?projectId=
+POST   /api/channels
+GET    /api/channels/:id/messages
+POST   /api/channels/:id/messages    body: { content, senderName, actorType, actorId, intent? }
+
+# Threads
+GET    /api/threads/:id
+POST   /api/threads/:id/resolve
+POST   /api/threads/:id/reopen
+GET    /api/threads/:id/summary
+
+# Tasks
+GET    /api/tasks?projectId=&status=&assigneeId=
+POST   /api/tasks
+PATCH  /api/tasks/:id
+POST   /api/tasks/:id/context-package
+
+# Agents
+GET    /api/agents?projectId=
+POST   /api/agents
+PATCH  /api/agents/:id
+
+# Projects
+GET    /api/projects
+POST   /api/projects
+DELETE  /api/projects/:id
+
+# Decisions / Documents
+GET    /api/decisions?projectId=
+POST   /api/decisions
+GET    /api/documents?projectId=
+POST   /api/documents
+
+# Knowledge / Goals / Audit / Machines / Internal Agent
+GET    /api/knowledge?projectId=
+GET    /api/goals?projectId=
+GET    /api/audit?projectId=
+GET    /api/machines
+POST   /api/internal-agent/...
+```
+
+### 5.2 Browser WebSocket
+
+连接端点：`ws://<host>/ws`
 
 **Server → Browser（推送）：**
 
@@ -163,142 +264,115 @@ type ServerToDaemon =
 type BrowserEvent =
   | { type: 'message:new'; message: Message }
   | { type: 'agent:update'; agent: Agent }
+  | { type: 'task:update'; task: Task }
   | { type: 'machine:update'; machine: Machine };
 ```
 
-### 4.3 Agent Bridge 协议
+### 5.3 Paseo Daemon 协议
 
-Agent 进程通过 stdout 输出以下格式发送消息：
+Agent 生命周期通过 Paseo Client (`packages/paseo-client`) 管理，使用 Paseo Daemon 的 WebSocket 协议（持久会话 + Turn-based 执行）。详见 `packages/paseo-client/src/paseo-daemon-client.ts`。
 
-```
-[[CREWDEN_SEND_MESSAGE]] {"content":"回复内容"}
-```
+MCP Bridge 在 Paseo 层暴露工具（`crewden_*` 前缀），Agent 可通过工具调用读写 Crewden API。
 
-**Fallback 机制：** 若 agent 进程退出时未输出任何 bridge marker（如 codex 输出纯文本），daemon 将完整 stdout 作为回复发送。
+### 5.4 Internal Agent 协议
 
-### 4.4 REST API
-
-```
-GET    /api/channels
-GET    /api/channels/:id/messages
-POST   /api/channels/:id/messages     body: { content, senderName, agentId? }
-
-GET    /api/agents
-POST   /api/agents                    body: AgentRuntimeConfig + { machineId? }
-PATCH  /api/agents/:id                body: { machineId? }  (重新绑定 machine)
-POST   /api/agents/:id/start
-POST   /api/agents/:id/stop
-
-GET    /api/machines
-```
+Server 端 Internal Agent 通过专用端点接收 delivery 和下发 inbox 消息，与 Paseo MCP Bridge 互补。
 
 ---
 
-## 5. 关键设计决策
+## 6. 关键设计决策
 
-### 5.1 内存 Store（非 SQLite）
+### 6.1 Cloudflare Worker + Durable Object (生产)
 
-**原因：** `better-sqlite3` 在 Node.js 24 上编译失败（native binding 不兼容）。MVP 阶段使用 Map-based 内存 store，重启后数据丢失。
+**原因：** 边缘部署低延迟，Durable Object 提供强一致性 SQLite 存储，零运维。Worker 和 DO 在同一 Cloudflare 网络内，访问延迟极低。
 
-**后续：** 迁移到 SQLite（待 better-sqlite3 支持 Node 24）或 Prisma + SQLite。
+**取舍：** Cloudflare 与本地 Server 的 API 实现需要手动保持对等，不能自动同步。
 
-### 5.2 One-shot 进程模式（非长驻进程）
+### 6.2 SQLite via Drizzle ORM (本地开发)
 
-**原因：** 长驻 stdin/stdout 双向流在三种 CLI 中行为不一致，调试困难。One-shot 模式每条消息 spawn 一个新进程，稳定可靠。
+**原因：** libsql client 支持本地文件 + 远程 Turso，Drizzle ORM 提供类型安全的 schema 定义和迁移。兼容 Node.js 24。
 
-**代价：** 每次都要重新加载 CLI，响应延迟 2-5 秒。
+### 6.3 Paseo Runtime（替代旧 Daemon）
 
-**后续：** 可以为 claude 实现持久进程模式（`--input-format stream-json`）。
+**原因：** Paseo 提供持久会话 + Turn-based 执行，上下文在各 turn 间保持。比旧的 one-shot 进程模式更高效，且支持多 runtime（claude/codex/gemini/pi）。
 
-### 5.3 Daemon 重启恢复
+### 6.4 hub-core 共享业务逻辑
 
-**原因：** Daemon 重启后内存中的 agent 映射丢失，但 server 端 agent 记录还在。
+**原因：** Server 和 Cloudflare 对等实现，需要共享核心业务逻辑（状态机校验、Agent 匹配、意图分类）。hub-core 只依赖 shared，不依赖任何基础设施。
 
-**方案：** `agent:deliver` 消息携带 `config` 和 `channelId` 字段，daemon 收到后自动重建 agent 条目。
+### 6.5 Repository 层（v2.4.1 引入）
 
-### 5.4 Codex Fallback
+**原因：** 将数据访问从 `db.ts` 中提取到独立 Repository 类，改善可测试性和可维护性。目前为具体类（非接口），按需逐步抽象。
 
-**原因：** Codex CLI 输出纯文本，不支持 bridge marker 格式。
+### 6.6 ContextPackage 失效机制
 
-**方案：** `agentProcessManager` 在进程退出时，若未检测到 bridge marker，将完整 stdout 作为回复发送。
+**原因：** Agent 执行必须有新鲜上下文。当关联的 document/decision 更新或 parent task 完成时，系统自动标记 contextPackage 为 stale，Agent 拉取时自动重新生成。
 
-### 5.5 像素风 UI
+### 6.7 Web 端类型独立
 
-**设计语言：**
-- 字体：`Courier New` monospace（全局）
-- 边框：`2px solid #000`，零圆角
-- 配色：亮黄 `#FFD700`（侧边栏）、品红 `#FF4D8D`（选中/强调）、白底（主区域）
-- 按钮：offset shadow `3px 3px 0 #000`，点击时 translate(2px, 2px)
-- 头像：4×4 像素马赛克格子，基于名字 hash 生成配色
+**原因：** Web 是纯前端 SPA，不依赖 `@crewden/shared` 运行时。类型在 `web/src/api.ts` 中独立维护。计划在 v2.5 引入 shared 为 devDependency 做类型校验。
 
 ---
 
-## 6. 开发规范
+## 7. 开发规范
 
-### 6.1 提交前检查
+### 7.1 分支工作流
+
+```
+main → feat/<name> → 实现 → verify → merge --no-ff → main → push
+```
+
+详见 `AGENTS.md` 中的完整规范。
+
+### 7.2 提交前检查
 
 ```bash
-pnpm verify   # typecheck + 全量测试（56 个测试）
+pnpm verify                                     # typecheck + 全量测试
+pnpm --filter @crewden/cloudflare exec wrangler deploy --dry-run
+pnpm --filter @crewden/cloudflare exec wrangler deploy --config wrangler.test.jsonc --dry-run
+VITE_API_BASE=https://crewden-hub-test.xingke0.workers.dev pnpm --filter @crewden/web build
 ```
 
-### 6.2 测试策略
+### 7.3 测试策略
 
-- **单元测试**：drivers、bridge、runtimeDetector
-- **集成测试**：server API（`isolate: false`，共享内存 store 单例）
-- **E2E 测试**：`packages/daemon/test/e2e.test.ts`，使用 fake-agent-cli 验证完整链路
-- **不 mock 数据库**：vitest `isolate: false` 保证测试和代码共享同一 store 实例
+- **单元测试**：hub-core 业务逻辑（stateMachine、intentClassifier、agentResolver、contextPackageBuilder）
+- **Repository 测试**：server repository 层
+- **API 集成测试**：server routes（共享 DB 实例）
+- **Cloudflare 测试**：`wrangler deploy --dry-run` + Miniflare 本地模拟
 
-### 6.3 新增 Runtime
+### 7.4 新增功能流程
 
-1. 在 `packages/daemon/src/drivers/` 新建 `<runtime>.ts`，实现 `RuntimeDriver` 接口
-2. 在 `agentProcessManager.ts` 的 `DRIVERS` map 中注册
-3. 在 `runtimeDetector.ts` 中添加探测逻辑
-4. 在 `packages/shared/src/protocol.ts` 的 `RuntimeId` 中添加新值
-5. 补充 `packages/daemon/test/drivers.test.ts` 测试用例
-
-### 6.4 新增 API 端点
-
-1. 在对应 `packages/server/src/routes/*.ts` 中添加路由
-2. 在 `packages/server/test/` 中添加测试（注意 `isolate: false`）
-3. 在 `packages/web/src/api.ts` 中添加前端调用函数
+1. 在 `shared/src/protocol.ts` 定义类型
+2. 在 `shared/src/validation.ts` 添加 Zod schema
+3. 如涉及共享业务逻辑，在 `hub-core/src/` 实现
+4. 在 `server/src/schema.ts` 添加 DB 表定义
+5. 在 `server/src/repository/` 添加 Repository（不要追加到 `db.ts` 末尾）
+6. 在 `server/src/routes/` 添加路由
+7. 在 `cloudflare/src/index.ts` 添加 Cloudflare 对等实现
+8. 在 `web/src/api.ts` 添加前端类型和 API 调用
+9. 补充对应测试
 
 ---
 
-## 7. 已知问题 & 局限性
+## 8. 迭代路线（v2.x 当前）
 
-| 问题 | 说明 | 优先级 |
-|------|------|--------|
-| 数据不持久 | 重启 server 丢失所有数据 | 高 |
-| 无认证 | 仅 `dev-machine-key`，不可暴露公网 | 高 |
-| One-shot 延迟 | 每条消息 2-5s 响应延迟 | 中 |
-| 无多 workspace | 只有一个默认 workspace | 低 |
-| 无 DM/Thread | 只有 channel 消息 | 低 |
-| Daemon 重启需手动重绑 machine | agent 绑定的 machineId 在 daemon 重启后变化 | 中 |
+| 版本 | 主题 | 依赖 | 状态 |
+|------|------|------|------|
+| v2.0 | Polymorphic Actor + Task Contract | v1.5.1 | ✅ 完成 |
+| v2.1 | Agent Identity v2 | v2.0 | ✅ 完成 |
+| v2.2 | Decision & Document | v2.0 | ✅ 完成 |
+| v2.2.1 | Project 多项目隔离 | v2.2 | ✅ 完成 |
+| v2.3 | Thread Intelligence | v2.2.1 | ✅ 完成 |
+| v2.4 | Context Package Engine | v2.3 | ✅ 完成 |
+| v2.4.1 | Code Hardening & Context Freshness | v2.4 | ✅ 完成 |
+| v2.5 | Plan & Approval Gate | v2.4.1 | ⏳ 规划中 |
+| v2.6 | Code Execution & Review | v2.5 | 📋 草稿 |
+| v2.7 | Autopilot Engine | v2.0 | 📋 草稿 |
+| v2.8 | Knowledge Layer | v2.6 | 📋 草稿 |
+| v2.9 | Full Trace & Audit | v2.5 | 📋 草稿 |
+| v2.10 | Self-Evolution | v2.8+v2.9 | 📋 草稿 |
 
----
-
-## 8. 迭代路线图
-
-### v0.2 — 持久化
-- [ ] 迁移 store 到 SQLite（better-sqlite3 或 Drizzle ORM）
-- [ ] Server 重启后恢复 channels / agents 数据
-- [ ] Agent 状态持久化
-
-### v0.3 — 稳定性
-- [ ] Daemon 重启后自动重绑 machineId（server 端按 hostname 匹配）
-- [ ] Agent 消息队列（防止并发 deliver 竞争）
-- [ ] 错误重试机制
-
-### v0.4 — 体验提升
-- [ ] Claude persistent 进程模式（减少延迟）
-- [ ] 消息 Markdown 渲染
-- [ ] Agent 运行日志实时查看
-- [ ] 多 channel 支持
-
-### v0.5 — 功能扩展
-- [ ] MCP 协议支持（替代简单 bridge）
-- [ ] Agent 工具调用（文件读写、代码执行）
-- [ ] 多用户 / 基础认证
+完整路线图见 [ROADMAP.md](./ROADMAP.md) 和 [ROADMAP_V2.md](./slack/ROADMAP_V2.md)。
 
 ---
 
@@ -308,35 +382,38 @@ pnpm verify   # typecheck + 全量测试（56 个测试）
 # 安装依赖
 pnpm install
 
-# 一键启动（server + web + daemon）
-./start.sh
-
-# 或分别启动
-pnpm dev                          # server :3000 + web :5173
-pnpm daemon -- --server-url http://localhost:3000 --api-key dev-machine-key
+# 启动开发服务（server + web）
+pnpm dev
 
 # 验证
 pnpm verify
+
+# Cloudflare 本地模拟（需要 wrangler）
+pnpm --filter @crewden/cloudflare dev
 ```
 
 **环境要求：**
 - Node.js 20+（已在 24 上验证）
 - pnpm 8+
-- 至少安装一种 CLI runtime（claude / codex / gemini）
+- Paseo Daemon（提供 Agent runtime）
 
 ---
 
-## 10. 目录说明速查
+## 10. 目录速查
 
 | 路径 | 说明 |
 |------|------|
 | `packages/shared/src/protocol.ts` | 所有 TypeScript 类型定义 |
-| `packages/shared/src/validation.ts` | Zod schema（与 protocol.ts 保持同步） |
-| `packages/server/src/db.ts` | 内存 Store 实现 |
-| `packages/server/src/ws/daemonSocket.ts` | Daemon WebSocket 处理逻辑 |
-| `packages/daemon/src/agentProcessManager.ts` | 进程生命周期管理 + bridge 解析 |
-| `packages/daemon/src/bridge/simpleToolBridge.ts` | Bridge 协议解析/构建 |
-| `packages/daemon/src/drivers/` | 各 runtime 的命令构建逻辑 |
-| `packages/web/src/pixel.css` | 像素风 CSS token |
+| `packages/shared/src/validation.ts` | Zod schema |
+| `packages/hub-core/src/` | 共享业务逻辑（状态机/Agent匹配/意图分类） |
+| `packages/server/src/db.ts` | SQLite 连接 + Store（Drizzle ORM） |
+| `packages/server/src/schema.ts` | Drizzle schema 定义 |
+| `packages/server/src/repository/` | Repository 层（数据访问抽象） |
+| `packages/server/src/routes/` | REST API 路由 |
+| `packages/server/src/runtime/` | Paseo 运行时集成 |
+| `packages/paseo-client/src/` | Paseo Daemon WebSocket 协议 |
+| `packages/cloudflare/src/index.ts` | Cloudflare Worker 入口 |
+| `packages/web/src/api.ts` | 前端 API 调用 + 类型定义 |
 | `packages/web/src/components/` | React 组件 |
-| `start.sh` | 一键启动脚本（自动清理旧 daemon 进程） |
+| `docs/slack/SLACK_LIKE_AI_AGENT_DESIGN.md` | v2.x 完整设计文档 |
+| `docs/slack/ROADMAP_V2.md` | v2.x 详细版本规划 |

@@ -42,11 +42,10 @@ import {
   type Agent,
   type DirectMessage,
   type Task,
-  type TaskStatus,
   type TaskProgressEventType,
   type TaskReview,
 } from '@crewden/shared';
-import { buildClarifyingQuestions, inferGoalRiskLevel, recommendAgentsForGoal } from '@crewden/hub-core';
+import { buildClarifyingQuestions, buildContextPackage, inferGoalRiskLevel, isTaskTransitionAllowed, recommendAgentsForGoal } from '@crewden/hub-core';
 import { getStore } from '../db.js';
 import { eventBus } from '../events.js';
 import { delegateAgent } from '../delegation.js';
@@ -297,6 +296,13 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     });
     eventBus.emit({ type: 'task:update', task });
     await notifyTaskAssignee(task);
+    if (task.status === 'assigned' && task.assigneeId) {
+      const cp = await generateAndStoreContextPackage(task);
+      if (cp) {
+        const refreshed = await store.getTask(task.id);
+        if (refreshed) return reply.status(201).send(refreshed);
+      }
+    }
     return reply.status(201).send(task);
   });
 
@@ -413,6 +419,7 @@ export async function internalAgentRoutes(app: FastifyInstance) {
       acceptedAt: parsed.data.status === 'accepted' ? new Date().toISOString() : existing.acceptedAt,
     });
     if (!updated) return reply.status(404).send({ error: 'Decision not found' });
+    await getStore().markContextPackagesStale('decision', updated.id);
     await getStore().appendAuditLog({
       actorType: 'agent',
       actorId: agent.id,
@@ -477,6 +484,7 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     if (!existing) return reply.status(404).send({ error: 'Document not found' });
     const updated = await getStore().updateDocument(existing.id, parsed.data);
     if (!updated) return reply.status(404).send({ error: 'Document not found' });
+    await getStore().markContextPackagesStale('document', updated.id);
     await getStore().appendAuditLog({
       actorType: 'agent',
       actorId: agent.id,
@@ -835,9 +843,15 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     const store = getStore();
     const agent = await store.getAgent(req.params.agentId);
     if (!agent) return reply.status(404).send({ error: 'Agent not found' });
-    const task = await store.getTask(req.params.taskId);
+    let task = await store.getTask(req.params.taskId);
     if (!task) return reply.status(404).send({ error: 'Task not found' });
     if (task.assigneeId && task.assigneeId !== agent.id) return reply.status(403).send({ error: 'Task is assigned to another agent' });
+    if (task.context?.contextPackage?.stale) {
+      const freshCp = await generateAndStoreContextPackage(task);
+      if (freshCp) {
+        task = (await store.getTask(task.id)) ?? task;
+      }
+    }
     return task;
   });
 
@@ -852,7 +866,7 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     if (!existing) return reply.status(404).send({ error: 'Task not found' });
     if (existing.assigneeId && existing.assigneeId !== agent.id) return reply.status(409).send({ error: 'Task is assigned to another agent' });
     const shouldAcknowledge = !existing.assigneeId;
-    const task = await store.updateTask(existing.id, {
+    let task = await store.updateTask(existing.id, {
       assigneeId: agent.id,
       owner: { actorType: 'agent', actorId: agent.id },
       status: existing.status === 'backlog' || existing.status === 'ready' ? 'assigned' : existing.status,
@@ -872,6 +886,10 @@ export async function internalAgentRoutes(app: FastifyInstance) {
       });
     }
     eventBus.emit({ type: 'task:update', task });
+    if (task.status === 'assigned' && existing.status !== 'assigned' && task.assigneeId) {
+      const cp = await generateAndStoreContextPackage(task);
+      if (cp) task = (await store.getTask(task.id)) ?? task;
+    }
     if (shouldAcknowledge) await createTaskClaimAcknowledgement(task, agent);
     return task;
   });
@@ -978,7 +996,7 @@ export async function internalAgentRoutes(app: FastifyInstance) {
     const assignee = parsed.data.assigneeId ? await store.findAgentByNameOrId(parsed.data.assigneeId) : undefined;
     if (parsed.data.assigneeId && !assignee) return reply.status(422).send({ error: 'Unknown assignee' });
     const taskPatch = assignee ? { ...parsed.data, assigneeId: assignee.id } : parsed.data;
-    const task = await store.updateTask(req.params.taskId, taskPatch);
+    let task = await store.updateTask(req.params.taskId, taskPatch);
     if (!task) return reply.status(404).send({ error: 'Task not found' });
     if (parsed.data.status && parsed.data.status !== existing.status) {
       await store.appendAuditLog({
@@ -993,6 +1011,10 @@ export async function internalAgentRoutes(app: FastifyInstance) {
       });
     }
     eventBus.emit({ type: 'task:update', task });
+    if (task.status === 'assigned' && existing.status !== 'assigned' && task.assigneeId) {
+      const cp = await generateAndStoreContextPackage(task);
+      if (cp) task = (await store.getTask(task.id)) ?? task;
+    }
     return task;
   });
 
@@ -1131,21 +1153,42 @@ async function internalReviewDecision(agentId: string, reviewId: string, body: u
   return reply.status(200).send(reviews.find((candidate) => candidate.id === reviewId));
 }
 
-function isTaskTransitionAllowed(from: TaskStatus, to: TaskStatus): boolean {
-  if (from === to) return true;
-  const allowed: Record<TaskStatus, TaskStatus[]> = {
-    backlog: ['spec_needed', 'ready', 'cancelled'],
-    spec_needed: ['ready', 'backlog'],
-    ready: ['assigned', 'backlog', 'cancelled'],
-    assigned: ['in_progress', 'ready', 'cancelled'],
-    in_progress: ['in_review', 'cancelled'],
-    in_review: ['changes_requested', 'qa', 'done', 'cancelled'],
-    changes_requested: ['in_progress', 'cancelled'],
-    qa: ['done', 'changes_requested', 'cancelled'],
-    done: [],
-    cancelled: [],
-  };
-  return allowed[from].includes(to);
+async function generateAndStoreContextPackage(task: Task): Promise<import('@crewden/shared').ContextPackage | undefined> {
+  if (!task.assigneeId) return undefined;
+  const store = getStore();
+  let contextPackage;
+  try {
+    contextPackage = await buildContextPackage(task, task.assigneeId, {
+      getDecision: async (id) => {
+        const all = await store.listDecisions({ projectId: task.projectId });
+        return all.find((d) => d.id === id);
+      },
+      getDocument: async (id) => {
+        const all = await store.listDocuments({ projectId: task.projectId });
+        return all.find((d) => d.id === id);
+      },
+      getThreadSummary: async (threadId) => store.getThreadSummary(threadId),
+      getTask: async (taskId) => store.getTask(taskId),
+      getAgent: async (agentId) => store.getAgent(agentId),
+      getAgentPermissions: async (agentId) => store.getAgentPermissions(agentId),
+    });
+  } catch (err) {
+    console.error('[ctx-pkg] buildContextPackage failed for task', task.id, ':', err);
+    return undefined;
+  }
+
+  await store.removeContextPackageRefsForTask(task.id);
+  const now = new Date().toISOString();
+  for (const id of task.context?.relatedDecisionIds ?? []) {
+    await store.addContextPackageRef(task.id, 'decision', id, now);
+  }
+  for (const id of task.context?.relatedDocumentIds ?? []) {
+    await store.addContextPackageRef(task.id, 'document', id, now);
+  }
+  await store.updateTask(task.id, {
+    context: { ...task.context, contextPackage },
+  });
+  return contextPackage;
 }
 
 async function validateTaskDependencies(taskId: string, blockedByTaskIds: string[] | undefined): Promise<string | undefined> {

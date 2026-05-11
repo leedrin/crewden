@@ -96,6 +96,33 @@ import {
   TaskStatusSchema,
 } from '@crewden/shared';
 import { buildClarifyingQuestions, buildContextPackage, findDuplicateMachineIds, inferGoalRiskLevel, isAgentActive, isTaskTransitionAllowed, recommendAgentsForGoal, resolveAgentReference, resolveAgents, resolveStartMachineId, toAgentDelivery, toRuntimeConfig } from '@crewden/hub-core';
+import { SqliteTaskMessageRepository } from './repository/index.js';
+import {
+  actorFromPatch,
+  appendProgress,
+  buildPlanSummary,
+  buildTaskDrafts,
+  compareInboxItems,
+  formatTaskSummaryLine,
+  isHighRiskTask,
+  makeTaskReview,
+  matchesAgentCapability,
+  parseStringArray,
+  scoreKnowledge,
+  toAgent,
+  toAgentActivity,
+  toAgentDelegation,
+  toDecision,
+  toDirectMessage,
+  toDirectMessageDelivery,
+  toDocument,
+  toGoal,
+  toGoalAlignment,
+  toKnowledgeEntry,
+  toMachine,
+  toReminder,
+  toTaskDelivery,
+} from './model.js';
 
 type SocketAttachment =
   | { kind: 'browser' }
@@ -125,7 +152,6 @@ const JSON_HEADERS = {
   'Access-Control-Allow-Headers': 'content-type,authorization',
   'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
 };
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const id = env.HUB.idFromName('central');
@@ -135,10 +161,16 @@ export default {
 };
 
 export class CrewdenHub extends DurableObject<Env> {
+  private _taskMessageRepo: SqliteTaskMessageRepository | null = null;
   private workspaceReads = new Map<string, {
     resolve: (result: WorkspaceEntry | WorkspaceError) => void;
     timeout: ReturnType<typeof setTimeout>;
   }>();
+
+  private get taskMessageRepo(): SqliteTaskMessageRepository {
+    if (!this._taskMessageRepo) this._taskMessageRepo = new SqliteTaskMessageRepository(this.ctx.storage.sql);
+    return this._taskMessageRepo;
+  }
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -2299,9 +2331,13 @@ export class CrewdenHub extends DurableObject<Env> {
 
     const taskMatch = path.match(/^\/tasks\/([^/]+)$/);
     if (request.method === 'GET' && taskMatch) {
-      const task = this.getTask(decodeURIComponent(taskMatch[1]));
+      let task = this.getTask(decodeURIComponent(taskMatch[1]));
       if (!task) return json({ error: 'Task not found' }, 404);
       if (task.assigneeId && task.assigneeId !== agent.id) return json({ error: 'Task is assigned to another agent' }, 403);
+      if (task.context?.contextPackage?.stale) {
+        const freshCp = await this.generateAndStoreContextPackage(task);
+        if (freshCp) task = this.getTask(task.id) ?? task;
+      }
       return json(task);
     }
 
@@ -2345,7 +2381,7 @@ export class CrewdenHub extends DurableObject<Env> {
         const blockersError = this.validateBlockersComplete({ ...existing, ...parsed.data });
         if (blockersError) return json({ error: blockersError }, 422);
       }
-      const task = this.updateTask(existing.id, parsed.data);
+      let task = this.updateTask(existing.id, parsed.data);
       if (!task) return json({ error: 'Task not found' }, 404);
       if (parsed.data.status && parsed.data.status !== existing.status) {
         this.appendAuditLog({
@@ -2360,6 +2396,10 @@ export class CrewdenHub extends DurableObject<Env> {
         });
       }
       this.broadcast({ type: 'task:update', task });
+      if (task.status === 'assigned' && existing.status !== 'assigned' && task.assigneeId) {
+        const cp = await this.generateAndStoreContextPackage(task);
+        if (cp) task = this.getTask(task.id) ?? task;
+      }
       return json(task);
     }
 
@@ -2369,7 +2409,7 @@ export class CrewdenHub extends DurableObject<Env> {
       if (!existing) return json({ error: 'Task not found' }, 404);
       if (existing.assigneeId && existing.assigneeId !== agent.id) return json({ error: 'Task is assigned to another agent' }, 409);
       const shouldAcknowledge = !existing.assigneeId;
-      const task = this.updateTask(existing.id, {
+      let task = this.updateTask(existing.id, {
         assigneeId: agent.id,
         owner: { actorType: 'agent', actorId: agent.id },
         status: existing.status === 'backlog' || existing.status === 'ready' ? 'assigned' : existing.status,
@@ -2389,6 +2429,10 @@ export class CrewdenHub extends DurableObject<Env> {
         });
       }
       this.broadcast({ type: 'task:update', task });
+      if (task.status === 'assigned' && existing.status !== 'assigned' && task.assigneeId) {
+        const cp = await this.generateAndStoreContextPackage(task);
+        if (cp) task = this.getTask(task.id) ?? task;
+      }
       if (shouldAcknowledge) this.createTaskClaimAcknowledgement(task, agent);
       return json(task);
     }
@@ -2702,12 +2746,11 @@ export class CrewdenHub extends DurableObject<Env> {
   }
 
   private listChannels(): Channel[] {
-    return this.ctx.storage.sql.exec<Row>('SELECT id, name, created_at FROM channels ORDER BY created_at').toArray().map(toChannel);
+    return this.taskMessageRepo.listChannels();
   }
 
   private getChannel(id: string): Channel | undefined {
-    const row = this.ctx.storage.sql.exec<Row>('SELECT id, name, created_at FROM channels WHERE id = ? LIMIT 1', id).toArray()[0];
-    return row ? toChannel(row) : undefined;
+    return this.taskMessageRepo.getChannel(id);
   }
 
   private createChannel(id: string, name: string): Channel {
@@ -2728,98 +2771,39 @@ export class CrewdenHub extends DurableObject<Env> {
   }
 
   private getMessage(id: string): Message | undefined {
-    const row = this.ctx.storage.sql.exec<Row>('SELECT * FROM messages WHERE id = ? LIMIT 1', id).toArray()[0];
-    if (!row) return undefined;
-    const message = toMessage(row);
-    if (message.threadRootId) return message;
-    return this.withThreadSummary(message);
+    return this.taskMessageRepo.getMessage(id);
   }
 
   private listMessages(channelId: string): Message[] {
-    const all = this.ctx.storage.sql
-      .exec<Row>('SELECT * FROM messages WHERE channel_id = ? ORDER BY created_at', channelId)
-      .toArray()
-      .map(toMessage);
-    return all.filter((message) => !message.threadRootId).map((message) => this.withThreadSummary(message, all));
+    return this.taskMessageRepo.listMessages(channelId);
   }
 
   private getThread(messageId: string): { root: Message; replies: Message[]; linkedDecisions?: Decision[]; linkedDocuments?: Document[] } | undefined {
-    const message = this.getMessage(messageId);
-    if (!message) return undefined;
-    const rootId = message.threadRootId ?? message.id;
-    const rootRow = this.ctx.storage.sql.exec<Row>('SELECT * FROM messages WHERE id = ? LIMIT 1', rootId).toArray()[0];
-    if (!rootRow) return undefined;
-    const root = toMessage(rootRow);
-    const replies = this.ctx.storage.sql
-      .exec<Row>('SELECT * FROM messages WHERE thread_root_id = ? ORDER BY created_at', root.id)
-      .toArray()
-      .map(toMessage);
-    const linkedDecisions = this.ctx.storage.sql
-      .exec<Row>('SELECT * FROM decisions WHERE source_thread_id = ? ORDER BY updated_at DESC', root.id)
-      .toArray()
-      .map(toDecision);
-    const linkedDocuments = this.ctx.storage.sql
-      .exec<Row>('SELECT * FROM documents WHERE source_thread_id = ? ORDER BY updated_at DESC', root.id)
-      .toArray()
-      .map(toDocument);
-    return { root: this.withThreadSummary(root, [root, ...replies]), replies, linkedDecisions, linkedDocuments };
+    return this.taskMessageRepo.getThread(messageId);
   }
 
   private withThreadSummary(message: Message, channelMessages?: Message[]): Message {
-    const candidates = channelMessages ?? this.ctx.storage.sql
-      .exec<Row>('SELECT * FROM messages WHERE channel_id = ? ORDER BY created_at', message.channelId)
-      .toArray()
-      .map(toMessage);
-    const replies = candidates.filter((candidate) => candidate.threadRootId === message.id);
-    if (replies.length === 0) return message;
-    return {
-      ...message,
-      replyCount: replies.length,
-      latestReplyAt: replies.at(-1)?.createdAt,
-    };
+    return this.taskMessageRepo.withThreadSummary(message, channelMessages);
   }
 
   private listRecentMessages(channelId: string, limit: number): Message[] {
-    return this.ctx.storage.sql
-      .exec<Row>('SELECT * FROM messages WHERE channel_id = ? ORDER BY created_at DESC LIMIT ?', channelId, limit)
-      .toArray()
-      .map(toMessage)
-      .reverse();
+    return this.taskMessageRepo.listRecentMessages(channelId, limit);
   }
 
   private searchMessages(query: string, limit: number) {
-    const needle = query.toLowerCase();
-    const channelMap = new Map(this.listChannels().map((channel) => [channel.id, channel.name]));
-    return this.ctx.storage.sql
-      .exec<Row>('SELECT * FROM messages ORDER BY created_at DESC LIMIT 1000')
-      .toArray()
-      .map(toMessage)
-      .filter((message) => message.content.toLowerCase().includes(needle))
-      .slice(0, limit)
-      .map((message) => ({ ...message, channelName: channelMap.get(message.channelId) ?? message.channelId }));
+    return this.taskMessageRepo.searchMessages(query, limit);
   }
 
   private findChannel(value: string): Channel | undefined {
-    const byId = this.getChannel(value);
-    if (byId) return byId;
-    return this.listChannels().find((channel) => channel.name === value);
+    return this.taskMessageRepo.findChannel(value);
   }
 
   private listTasks(filter: { channelId?: string; status?: TaskStatus; assigneeId?: string } = {}): Task[] {
-    return this.ctx.storage.sql
-      .exec<Row>('SELECT * FROM tasks ORDER BY created_at')
-      .toArray()
-      .map(toTask)
-      .filter((task) =>
-        (!filter.channelId || task.channelId === filter.channelId) &&
-        (!filter.status || task.status === filter.status) &&
-        (!filter.assigneeId || task.assigneeId === filter.assigneeId)
-      );
+    return this.taskMessageRepo.listTasks(filter);
   }
 
   private getTask(id: string): Task | undefined {
-    const row = this.ctx.storage.sql.exec<Row>('SELECT * FROM tasks WHERE id = ? LIMIT 1', id).toArray()[0];
-    return row ? toTask(row) : undefined;
+    return this.taskMessageRepo.getTask(id);
   }
 
   private buildInbox(agent: Agent, limit: number): AgentInboxItem[] {
@@ -2984,27 +2968,7 @@ export class CrewdenHub extends DurableObject<Env> {
   }
 
   private createMessage(message: NewMessage): Message {
-    const created: Message = {
-      ...message,
-      actorType: message.actorType ?? (message.agentId ? 'agent' : 'human'),
-      actorId: message.actorId ?? message.agentId ?? message.senderName,
-      createdAt: new Date().toISOString(),
-    };
-    this.ctx.storage.sql.exec(
-      `INSERT INTO messages (id, channel_id, sender_name, content, agent_id, actor_type, actor_id, thread_root_id, mentions, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      created.id,
-      created.channelId,
-      created.senderName,
-      created.content,
-      created.agentId ?? null,
-      created.actorType,
-      created.actorId,
-      created.threadRootId ?? null,
-      created.mentions ? JSON.stringify(created.mentions) : null,
-      created.createdAt
-    );
-    return created;
+    return this.taskMessageRepo.createMessage(message);
   }
 
   private createTaskClaimAcknowledgement(task: Task, agent: Agent): void {
@@ -3041,52 +3005,7 @@ export class CrewdenHub extends DurableObject<Env> {
   }
 
   private createTask(task: NewTask): Task {
-    const now = new Date().toISOString();
-    const owner = task.owner ?? (task.assigneeId ? { actorType: 'agent' as const, actorId: task.assigneeId } : undefined);
-    const created: Task = {
-      ...task,
-      title: task.title.slice(0, 200),
-      status: normalizeTaskStatus(task.status),
-      type: task.type ?? 'feature',
-      creator: task.creator ?? { actorType: 'human', actorId: task.creatorName },
-      owner,
-      assigneeId: task.assigneeId ?? (owner?.actorType === 'agent' ? owner.actorId : undefined),
-      isBlocked: task.isBlocked ?? false,
-      version: 1,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.ctx.storage.sql.exec(
-      `INSERT INTO tasks (id, channel_id, message_id, title, status, type, creator_name, creator_type, creator_id, assignee_id, owner_type, owner_id, reviewer_type, reviewer_id, acceptance_criteria, definition_of_done, constraints, depends_on, is_blocked, blocked_reason, source_channel_id, source_thread_id, context, version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      created.id,
-      created.channelId,
-      created.messageId ?? null,
-      created.title,
-      created.status,
-      created.type,
-      created.creatorName,
-      created.creator.actorType,
-      created.creator.actorId,
-      created.assigneeId ?? null,
-      created.owner?.actorType ?? null,
-      created.owner?.actorId ?? null,
-      created.reviewer?.actorType ?? null,
-      created.reviewer?.actorId ?? null,
-      created.acceptanceCriteria ? JSON.stringify(created.acceptanceCriteria) : null,
-      created.definitionOfDone ? JSON.stringify(created.definitionOfDone) : null,
-      created.constraints ? JSON.stringify(created.constraints) : null,
-      created.dependsOn ? JSON.stringify(created.dependsOn) : null,
-      created.isBlocked ? 1 : 0,
-      created.blockedReason ?? null,
-      created.sourceChannelId ?? null,
-      created.sourceThreadId ?? null,
-      created.context ? JSON.stringify(created.context) : null,
-      created.version,
-      created.createdAt,
-      created.updatedAt
-    );
-    return created;
+    return this.taskMessageRepo.createTask(task);
   }
 
   private createGoal(goal: Omit<GoalBrief, 'createdAt' | 'updatedAt'>): GoalBrief {
@@ -3365,71 +3284,23 @@ export class CrewdenHub extends DurableObject<Env> {
   }
 
   private updateTask(id: string, patch: TaskPatch): Task | undefined {
-    const existing = this.getTask(id);
-    if (!existing) return undefined;
-    const owner = patch.owner ?? (patch.assigneeId ? { actorType: 'agent' as const, actorId: patch.assigneeId } : undefined);
-    const updated: Task = {
-      ...existing,
-      ...patch,
-      status: patch.status ? normalizeTaskStatus(patch.status) : existing.status,
-      owner: owner ?? patch.owner ?? existing.owner,
-      assigneeId: patch.assigneeId ?? (owner?.actorType === 'agent' ? owner.actorId : existing.assigneeId),
-      version: existing.version + 1,
-      updatedAt: new Date().toISOString(),
-    };
-    this.ctx.storage.sql.exec(
-      `UPDATE tasks
-       SET status = ?, assignee_id = ?, owner_type = ?, owner_id = ?, reviewer_type = ?, reviewer_id = ?,
-           acceptance_criteria = ?, definition_of_done = ?, constraints = ?, depends_on = ?,
-           is_blocked = ?, blocked_reason = ?, context = ?, version = ?, updated_at = ?
-       WHERE id = ?`,
-      updated.status,
-      updated.assigneeId ?? null,
-      updated.owner?.actorType ?? null,
-      updated.owner?.actorId ?? null,
-      updated.reviewer?.actorType ?? null,
-      updated.reviewer?.actorId ?? null,
-      updated.acceptanceCriteria ? JSON.stringify(updated.acceptanceCriteria) : null,
-      updated.definitionOfDone ? JSON.stringify(updated.definitionOfDone) : null,
-      updated.constraints ? JSON.stringify(updated.constraints) : null,
-      updated.dependsOn ? JSON.stringify(updated.dependsOn) : null,
-      updated.isBlocked ? 1 : 0,
-      updated.blockedReason ?? null,
-      updated.context ? JSON.stringify(updated.context) : null,
-      updated.version,
-      updated.updatedAt,
-      id,
-    );
-    return updated;
+    return this.taskMessageRepo.updateTask(id, patch);
   }
 
   private addContextPackageRef(taskId: string, refType: string, refId: string, refUpdatedAt: string): void {
-    this.ctx.storage.sql.exec(
-      'INSERT OR REPLACE INTO context_package_refs (task_id, ref_type, ref_id, ref_updated_at) VALUES (?, ?, ?, ?)',
-      taskId, refType, refId, refUpdatedAt,
-    );
+    this.taskMessageRepo.addContextPackageRef(taskId, refType, refId, refUpdatedAt);
   }
 
   private removeContextPackageRefsForTask(taskId: string): void {
-    this.ctx.storage.sql.exec('DELETE FROM context_package_refs WHERE task_id = ?', taskId);
+    this.taskMessageRepo.removeContextPackageRefsForTask(taskId);
   }
 
   private findTaskIdsByRef(refType: string, refId: string): string[] {
-    const cursor = this.ctx.storage.sql.exec('SELECT task_id FROM context_package_refs WHERE ref_type = ? AND ref_id = ?', refType, refId);
-    return Array.from(cursor).map((row) => String(row.task_id));
+    return this.taskMessageRepo.findTaskIdsByRef(refType, refId);
   }
 
   private markContextPackagesStale(refType: string, refId: string): number {
-    const taskIds = this.findTaskIdsByRef(refType, refId);
-    for (const taskId of taskIds) {
-      const task = this.getTask(taskId);
-      if (task?.context?.contextPackage && !task.context.contextPackage.stale) {
-        task.context.contextPackage.stale = true;
-        task.context.contextPackage.staleReason = `${refType} updated: ${refId}`;
-        this.updateTask(taskId, { context: task.context });
-      }
-    }
-    return taskIds.length;
+    return this.taskMessageRepo.markContextPackagesStale(refType, refId);
   }
 
   private updateGoal(id: string, patch: Partial<Pick<GoalBrief, 'objective' | 'background' | 'successCriteria' | 'constraints' | 'assumptions' | 'risks' | 'status'>>): GoalBrief | undefined {
@@ -4083,26 +3954,20 @@ export class CrewdenHub extends DurableObject<Env> {
       if (attachment?.kind === 'browser') ws.send(raw);
     }
   }
-
 }
-
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
 }
-
 function unauthorized(reason: string): Response {
   return json({ error: 'Unauthorized', reason }, 401);
 }
-
 function getBearerToken(header: string | null): string | undefined {
   const match = (header ?? '').match(/^Bearer\s+(.+)$/i);
   return match?.[1]?.trim() || undefined;
 }
-
 function isUnsafeWorkspacePath(value: string): boolean {
   return value.startsWith('/') || value.split(/[\\/]+/).some((part) => part === '..');
 }
-
 export async function requireBrowserAuth(request: Request, env: Env): Promise<Response | null> {
   const expected = env.WEB_AUTH_TOKEN;
   if (!expected) return unauthorized('WEB_AUTH_TOKEN not configured');
@@ -4114,7 +3979,6 @@ export async function requireBrowserAuth(request: Request, env: Env): Promise<Re
   if (!timingSafeEqualStr(provided, expected)) return unauthorized('invalid token');
   return null;
 }
-
 export async function requireBrowserAuthForWs(url: URL, env: Env): Promise<Response | null> {
   const expected = env.WEB_AUTH_TOKEN;
   if (!expected) return new Response('Unauthorized', { status: 401 });
@@ -4123,7 +3987,6 @@ export async function requireBrowserAuthForWs(url: URL, env: Env): Promise<Respo
   if (!timingSafeEqualStr(provided, expected)) return new Response('Unauthorized', { status: 401 });
   return null;
 }
-
 export function timingSafeEqualStr(a: string, b: string): boolean {
   const enc = new TextEncoder();
   const ab = enc.encode(a);
@@ -4134,393 +3997,4 @@ export function timingSafeEqualStr(a: string, b: string): boolean {
     diff |= ab[i] ^ bb[i];
   }
   return diff === 0;
-}
-
-function toChannel(row: Row): Channel {
-  return {
-    id: String(row.id),
-    name: String(row.name),
-    createdAt: String(row.created_at),
-  };
-}
-
-function toMessage(row: Row): Message {
-  return {
-    id: String(row.id),
-    channelId: String(row.channel_id),
-    senderName: String(row.sender_name),
-    content: String(row.content),
-    agentId: row.agent_id ? String(row.agent_id) : undefined,
-    actorType: String(row.actor_type ?? (row.agent_id ? 'agent' : 'human')) as ActorType,
-    actorId: String(row.actor_id ?? row.agent_id ?? row.sender_name),
-    threadRootId: row.thread_root_id ? String(row.thread_root_id) : undefined,
-    mentions: row.mentions ? JSON.parse(String(row.mentions)) as Message['mentions'] : undefined,
-    createdAt: String(row.created_at),
-  };
-}
-
-function toAgentActivity(row: Row): AgentActivity {
-  return {
-    id: String(row.id),
-    agentId: String(row.agent_id),
-    type: String(row.type) as AgentActivity['type'],
-    detail: row.detail ? String(row.detail) : undefined,
-    createdAt: String(row.created_at),
-  };
-}
-
-function toDirectMessage(row: Row): DirectMessage {
-  return {
-    id: String(row.id),
-    fromAgentId: String(row.from_agent_id),
-    toAgentId: String(row.to_agent_id),
-    content: String(row.content),
-    createdAt: String(row.created_at),
-  };
-}
-
-function toAgentDelegation(row: Row): AgentDelegation {
-  return {
-    id: String(row.id),
-    fromAgentId: String(row.from_agent_id),
-    toAgentId: String(row.to_agent_id),
-    content: String(row.content),
-    status: String(row.status) as AgentDelegation['status'],
-    error: row.error ? String(row.error) : undefined,
-    createdAt: String(row.created_at),
-  };
-}
-
-function toTask(row: Row): Task {
-  const context = row.context ? JSON.parse(String(row.context)) as Task['context'] : undefined;
-  const ownerId = row.owner_id ? String(row.owner_id) : row.assignee_id ? String(row.assignee_id) : undefined;
-  const reviewerId = row.reviewer_id ? String(row.reviewer_id) : context?.reviewerAgentId;
-  return {
-    id: String(row.id),
-    channelId: String(row.channel_id),
-    messageId: row.message_id ? String(row.message_id) : undefined,
-    title: String(row.title),
-    status: normalizeTaskStatus(String(row.status)),
-    type: String(row.type ?? 'feature') as Task['type'],
-    creatorName: String(row.creator_name),
-    creator: {
-      actorType: String(row.creator_type ?? 'human') as ActorType,
-      actorId: String(row.creator_id ?? row.creator_name),
-    },
-    assigneeId: row.assignee_id ? String(row.assignee_id) : undefined,
-    owner: ownerId ? { actorType: String(row.owner_type ?? 'agent') as ActorType, actorId: ownerId } : undefined,
-    reviewer: reviewerId ? { actorType: String(row.reviewer_type ?? 'agent') as ActorType, actorId: reviewerId } : undefined,
-    acceptanceCriteria: parseStringArray(row.acceptance_criteria),
-    definitionOfDone: parseStringArray(row.definition_of_done),
-    constraints: parseStringArray(row.constraints),
-    dependsOn: parseStringArray(row.depends_on),
-    isBlocked: Boolean(Number(row.is_blocked ?? 0)),
-    blockedReason: row.blocked_reason ? String(row.blocked_reason) : context?.blockedReason,
-    sourceChannelId: row.source_channel_id ? String(row.source_channel_id) : undefined,
-    sourceThreadId: row.source_thread_id ? String(row.source_thread_id) : undefined,
-    context,
-    version: Number(row.version ?? 1),
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
-  };
-}
-
-function parseStringArray(value: string | null): string[] | undefined {
-  if (!value) return undefined;
-  const parsed = JSON.parse(value) as unknown;
-  return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : undefined;
-}
-
-function normalizeTaskStatus(status: string): TaskStatus {
-  if (status === 'todo') return 'backlog';
-  if (status === 'blocked') return 'in_progress';
-  return status as TaskStatus;
-}
-
-function toGoal(row: Row): GoalBrief {
-  return {
-    id: String(row.id),
-    channelId: String(row.channel_id),
-    sourceMessageId: row.source_message_id ? String(row.source_message_id) : undefined,
-    requesterName: String(row.requester_name),
-    objective: String(row.objective),
-    background: JSON.parse(String(row.background)) as string[],
-    successCriteria: JSON.parse(String(row.success_criteria)) as string[],
-    constraints: JSON.parse(String(row.constraints)) as string[],
-    assumptions: JSON.parse(String(row.assumptions)) as string[],
-    risks: JSON.parse(String(row.risks)) as string[],
-    status: String(row.status) as GoalBriefStatus,
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
-  };
-}
-
-function toGoalAlignment(row: Row): GoalAlignment {
-  return {
-    id: String(row.id),
-    channelId: String(row.channel_id),
-    threadRootId: String(row.thread_root_id),
-    sourceMessageId: String(row.source_message_id),
-    goalId: row.goal_id ? String(row.goal_id) : undefined,
-    status: String(row.status) as GoalAlignmentStatus,
-    objective: String(row.objective),
-    questions: JSON.parse(String(row.questions)) as string[],
-    answers: JSON.parse(String(row.answers)) as string[],
-    successCriteria: JSON.parse(String(row.success_criteria)) as string[],
-    constraints: JSON.parse(String(row.constraints)) as string[],
-    planSummary: row.plan_summary ? String(row.plan_summary) : undefined,
-    taskDrafts: JSON.parse(String(row.task_drafts)) as GoalAlignment['taskDrafts'],
-    recommendedAgentIds: JSON.parse(String(row.recommended_agent_ids)) as string[],
-    reviewerAgentIds: JSON.parse(String(row.reviewer_agent_ids)) as string[],
-    recommendationReasons: JSON.parse(String(row.recommendation_reasons)) as Record<string, string>,
-    gaps: JSON.parse(String(row.gaps)) as string[],
-    riskLevel: String(row.risk_level) as GoalAlignment['riskLevel'],
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
-  };
-}
-
-function buildTaskDrafts(objective: string, recommendation: ReturnType<typeof recommendAgentsForGoal>): GoalAlignment['taskDrafts'] {
-  const owner = recommendation.ownerAgentIds[0];
-  const reviewer = recommendation.reviewerAgentIds[0];
-  return [
-    {
-      title: `Plan: ${objective}`.slice(0, 200),
-      assigneeId: owner,
-      role: 'owner',
-      acceptanceCriteria: ['Scope, milestones, and handoff points are clear.'],
-    },
-    {
-      title: `Review acceptance for: ${objective}`.slice(0, 200),
-      assigneeId: reviewer,
-      role: 'reviewer',
-      dependencies: owner ? [`Owner plan from ${owner}`] : [],
-      acceptanceCriteria: ['Review notes and acceptance risks are documented.'],
-    },
-  ];
-}
-
-function buildPlanSummary(objective: string, recommendation: ReturnType<typeof recommendAgentsForGoal>, riskLevel: GoalAlignment['riskLevel']): string {
-  const owners = recommendation.ownerAgentIds.length > 0 ? recommendation.ownerAgentIds.join(', ') : 'No owner match';
-  const reviewers = recommendation.reviewerAgentIds.length > 0 ? recommendation.reviewerAgentIds.join(', ') : 'No reviewer match';
-  return `Draft plan for "${objective}". Owners: ${owners}. Reviewers: ${reviewers}. Risk: ${riskLevel}.`;
-}
-
-function matchesAgentCapability(agent: Agent, task: Task): boolean {
-  const haystack = [
-    task.title,
-    task.context?.goal,
-    task.context?.goalObjective,
-    task.context?.background,
-    ...(task.context?.acceptanceCriteria ?? []),
-    ...(task.context?.artifacts ?? []),
-  ].filter(Boolean).join(' ').toLowerCase();
-  const capabilities = [
-    agent.name,
-    agent.displayName,
-    agent.description,
-    ...(agent.organization?.roles ?? []),
-    ...(agent.organization?.capabilities ?? []),
-    ...(agent.organization?.responsibilities ?? []),
-  ].filter(Boolean).map((item) => item!.toLowerCase());
-  return capabilities.some((capability) => capability.length >= 3 && (haystack.includes(capability) || capability.split(/\W+/).some((part) => part.length >= 4 && haystack.includes(part))));
-}
-
-function formatTaskSummaryLine(task: Task): string {
-  const goal = task.context?.goal ? ` goal: ${task.context.goal}` : '';
-  return `- ${task.id} [${task.status}] #${task.channelId}: ${task.title}${goal}`;
-}
-
-function compareInboxItems(a: AgentInboxItem, b: AgentInboxItem): number {
-  const rank = { urgent: 0, high: 1, normal: 2, low: 3 };
-  return rank[a.priority] - rank[b.priority] || new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-}
-
-function appendProgress(task: Task, agentId: string, type: TaskProgressEventType, detail: string): Task['context'] {
-  const event = {
-    id: crypto.randomUUID(),
-    taskId: task.id,
-    agentId,
-    type,
-    detail,
-    createdAt: new Date().toISOString(),
-  };
-  return {
-    ...task.context,
-    claimedByAgentId: type === 'claimed' ? agentId : task.context?.claimedByAgentId,
-    progressEvents: [...(task.context?.progressEvents ?? []), event].slice(-20),
-  };
-}
-
-function makeTaskReview(taskId: string, data: { requesterAgentId?: string; reviewerAgentId?: string; evidence: string[]; checklist: Array<string | { label: string; checked: boolean }>; comment?: string }): TaskReview {
-  const now = new Date().toISOString();
-  return {
-    id: crypto.randomUUID(),
-    taskId,
-    requesterAgentId: data.requesterAgentId,
-    reviewerAgentId: data.reviewerAgentId,
-    status: 'requested',
-    evidence: data.evidence,
-    checklist: data.checklist.map((item) => typeof item === 'string' ? { label: item, checked: false } : item),
-    comment: data.comment,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-function isHighRiskTask(task: { context?: { risks?: string[] } }): boolean {
-  return (task.context?.risks ?? []).some((risk) => /high|production|payment|legal|privacy|credential|高风险|上线|支付|隐私/.test(risk.toLowerCase()));
-}
-
-function actorFromPatch(actorType: ActorType | undefined, actorId: string | undefined): { actorType: ActorType; actorId: string } | undefined {
-  return actorId ? { actorType: actorType ?? 'agent', actorId } : undefined;
-}
-
-function toReminder(row: Row): Reminder {
-  return {
-    id: String(row.id),
-    agentId: String(row.agent_id),
-    channelId: String(row.channel_id),
-    message: String(row.message),
-    triggerAt: String(row.trigger_at),
-    status: String(row.status) as ReminderStatus,
-    createdAt: String(row.created_at),
-  };
-}
-
-function toKnowledgeEntry(row: Row): KnowledgeEntry {
-  return {
-    id: String(row.id),
-    kind: String(row.kind) as KnowledgeKind,
-    title: String(row.title),
-    summary: String(row.summary),
-    body: String(row.body),
-    tags: JSON.parse(String(row.tags)) as string[],
-    sourceRefs: JSON.parse(String(row.source_refs)) as string[],
-    ownerAgentId: row.owner_agent_id ? String(row.owner_agent_id) : undefined,
-    reviewerAgentId: row.reviewer_agent_id ? String(row.reviewer_agent_id) : undefined,
-    status: String(row.status) as KnowledgeStatus,
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
-  };
-}
-
-function toDecision(row: Row): Decision {
-  const status = String(row.status);
-  return {
-    id: String(row.id),
-    channelId: String(row.channel_id),
-    sourceThreadId: row.source_thread_id ? String(row.source_thread_id) : undefined,
-    title: String(row.title),
-    status: (status === 'accepted' || status === 'deprecated' || status === 'superseded' ? status : 'proposed') as DecisionStatus,
-    problem: String(row.problem),
-    alternatives: parseStringArray(row.alternatives),
-    decisionText: String(row.decision_text),
-    rationale: row.rationale ? String(row.rationale) : undefined,
-    consequences: parseStringArray(row.consequences),
-    participants: row.participants ? JSON.parse(String(row.participants)) as Decision['participants'] : undefined,
-    relatedDecisions: parseStringArray(row.related_decisions),
-    supersededBy: row.superseded_by ? String(row.superseded_by) : undefined,
-    acceptedAt: row.accepted_at ? String(row.accepted_at) : undefined,
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
-  };
-}
-
-function toDocument(row: Row): Document {
-  const status = String(row.status);
-  return {
-    id: String(row.id),
-    kind: String(row.kind) as DocumentKind,
-    title: String(row.title),
-    status: (status === 'in_review' || status === 'approved' || status === 'deprecated' || status === 'superseded' ? status : 'draft') as DocumentStatus,
-    content: String(row.content),
-    sourceThreadId: row.source_thread_id ? String(row.source_thread_id) : undefined,
-    sourceChannelId: String(row.source_channel_id),
-    author: {
-      actorType: String(row.author_type) as ActorType,
-      actorId: String(row.author_id),
-    },
-    authorName: String(row.author_name),
-    reviewers: row.reviewers ? JSON.parse(String(row.reviewers)) as Document['reviewers'] : undefined,
-    relatedDecisions: parseStringArray(row.related_decisions),
-    relatedTasks: parseStringArray(row.related_tasks),
-    supersededBy: row.superseded_by ? String(row.superseded_by) : undefined,
-    approvedAt: row.approved_at ? String(row.approved_at) : undefined,
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
-  };
-}
-
-function scoreKnowledge(entry: KnowledgeEntry, query: string): number {
-  if (!query) return 1;
-  let score = 0;
-  if (entry.title.toLowerCase().includes(query)) score += 8;
-  if (entry.summary.toLowerCase().includes(query)) score += 5;
-  if (entry.body.toLowerCase().includes(query)) score += 2;
-  score += entry.tags.filter((tag) => tag.toLowerCase().includes(query)).length * 4;
-  return score;
-}
-
-function toDirectMessageDelivery(dm: DirectMessage) {
-  return {
-    id: dm.id,
-    channelId: `dm:${dm.fromAgentId}:${dm.toAgentId}`,
-    channelName: `DM from ${dm.fromAgentId}`,
-    senderName: dm.fromAgentId,
-    content: dm.content,
-    createdAt: dm.createdAt,
-  };
-}
-
-function toTaskDelivery(task: Task) {
-  return {
-    id: `task:${task.id}:${task.updatedAt}`,
-    channelId: `task:${task.id}`,
-    channelName: `Task ${task.id}`,
-    senderName: 'task-board',
-    content: [
-      `Task assigned or updated: ${task.title}`,
-      `Task ID: ${task.id}`,
-      `Status: ${task.status}`,
-      `Channel: ${task.channelId}`,
-      task.context?.goal ? `Goal: ${task.context.goal}` : undefined,
-      task.context?.background ? `Background: ${task.context.background}` : undefined,
-      task.context?.handoffNotes?.length ? `Latest handoff: ${task.context.handoffNotes.at(-1)}` : undefined,
-      '',
-      'Use `crewden task read <taskId> --context` for details, `crewden task update <taskId> --status assigned|in_progress|in_review|changes_requested|qa|done|cancelled` when you make progress, and `crewden task block <taskId> --reason "..." --needs "..."` for blockers.',
-    ].filter(Boolean).join('\n'),
-    createdAt: task.updatedAt,
-  };
-}
-
-function toAgent(row: Row): Agent {
-  return {
-    id: String(row.id),
-    name: String(row.name),
-    displayName: row.display_name ? String(row.display_name) : undefined,
-    description: row.description ? String(row.description) : undefined,
-    runtime: String(row.runtime) as RuntimeId,
-    model: row.model ? String(row.model) : undefined,
-    systemPrompt: row.system_prompt ? String(row.system_prompt) : undefined,
-    envVars: row.env_vars ? JSON.parse(String(row.env_vars)) as Record<string, string> : undefined,
-    organization: row.organization ? JSON.parse(String(row.organization)) as Agent['organization'] : undefined,
-    machineId: row.machine_id ? String(row.machine_id) : undefined,
-    status: String(row.status) as Agent['status'],
-    autoStart: Boolean(Number(row.auto_start ?? 0)),
-    createdAt: String(row.created_at),
-  };
-}
-
-function toMachine(row: Row): Machine {
-  return {
-    id: String(row.id),
-    hostname: String(row.hostname),
-    os: String(row.os),
-    daemonVersion: String(row.daemon_version),
-    runtimes: JSON.parse(String(row.runtimes)) as RuntimeId[],
-    runtimeVersions: JSON.parse(String(row.runtime_versions)) as Record<string, string>,
-    status: String(row.status) as Machine['status'],
-    connectedAt: String(row.connected_at),
-  };
 }

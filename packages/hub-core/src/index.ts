@@ -7,3 +7,4 @@ export * from './intentClassifier.js';
 export * from './machine.js';
 export * from './message.js';
 export * from './taskStateMachine.js';
+export * from './taskCoordination.js';

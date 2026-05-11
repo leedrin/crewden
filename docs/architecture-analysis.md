@@ -1,6 +1,7 @@
 # Crewden 架构分析报告
 
-> 日期：2026-05-06
+> 日期：2026-05-06（原始分析）
+> 更新：2026-05-09（v2.4.1 后补充）
 > 代码库分析范围：packages/ 下 6 个子包（shared、hub-core、paseo-client、server、cloudflare、web）
 
 ---
@@ -172,44 +173,42 @@ graph TB
 
 ### 3.3 存在的架构问题
 
-#### 问题 1：`server/db.ts` 是 God File
+> **v2.4.1 更新（2026-05-09）**：问题 1 已部分解决——Repository 层已提取（`server/src/repository/`），db.ts 从 ~2200 行降至 ~1800 行。问题 2 已部分解决——task 状态机已提取到 `hub-core/src/taskStateMachine.ts`。完整列见下方。
+
+#### 问题 1：`server/db.ts` 是 God File（🟡 v2.4.1 部分解决）
 
 ```
-packages/server/src/db.ts — 2200+ 行
-├── 数据访问（SQL）
-├── 业务规则（状态校验）
-├── 消息处理（classifyMessageIntent 调用）
-├── Agent 生命周期
+packages/server/src/db.ts — ~1800 行（v2.4.1 后，从 ~2200 行降低）
+├── 数据访问（部分已提取到 repository/）
+├── 业务规则（任务状态机已提取到 hub-core）
+├── Agent 生命周期（仍在 db.ts 中）
+├── 消息处理（仍在 db.ts 中）
 └── 事务管理
 ```
 
-**违反原则**：单一职责。DB 操作、业务规则、Agent 管理混在一个文件中。
+**v2.4.1 已做**：提取了 Task、Channel、Message、Thread、Project、ContextPackageRef 到 `server/src/repository/`。
 
-**建议**：拆分为 Repository 层（纯数据访问）+ Service 层（业务编排）。
+**尚待做**：Agent 生命周期、Reminder、Knowledge、Audit 等模块的 repository 提取。
 
 ```
 packages/server/src/
-├── db/
-│   ├── repository/
-│   │   ├── channel.repository.ts    ← 纯 SQL
-│   │   ├── task.repository.ts
-│   │   └── ...
-│   └── db.ts                       ← 连接管理 + 迁移
-├── service/
-│   ├── task.service.ts             ← 业务规则 + 状态机
-│   ├── agent.service.ts
-│   └── ...
+├── repository/                    ← v2.4.1 新增
+│   ├── task.repository.ts
+│   ├── channel.repository.ts
+│   ├── message.repository.ts
+│   ├── thread.repository.ts
+│   ├── project.repository.ts
+│   └── contextPackageRef.repository.ts
+├── db.ts                         ← 连接管理 + 迁移 + 剩余 Store
 └── routes/
-    └── tasks.ts                    ← HTTP 适配 + 鉴权
+    └── tasks.ts                  ← HTTP 适配 + 鉴权
 ```
 
-#### 问题 2：`hub-core` 过薄
+#### 问题 2：`hub-core` 过薄（🟡 v2.4.1 部分解决）
 
-当前 `hub-core` 只有 7 个模块（agent、goalAlignment、intentClassifier、machine、message），大部分业务逻辑仍在 `server/db.ts` 中实现，没有提取到 `hub-core`。
+**v2.4.1 已做**：Task 状态机已提取到 `hub-core/src/taskStateMachine.ts`。
 
-**影响**：`server` 和 `cloudflare` 各自在 `db.ts` 和 `index.ts` 中重复实现了相似逻辑（task 状态校验、消息投递、Agent 委派等）。
-
-**建议**：将 task 状态机、消息路由、Agent 委派等核心业务规则提取到 `hub-core`，两端只做 HTTP 适配。
+**尚待做**：消息路由、Agent 委派、Goal 对齐等核心规则仍在 server/cloudflare 中有重复实现。留到 v2.5。
 
 #### 问题 3：Web 端类型孤立
 
@@ -285,31 +284,33 @@ graph TB
 
 ### 4.2 改造优先级
 
-| 优先级 | 改造项 | 影响范围 | 预估工作量 |
-|---|---|---|---|
-| P0 | 拆分 `server/db.ts` → Repository + Service | server 全部路由 | 大 |
-| P1 | 扩展 `hub-core`，提取 task 状态机、Agent 委派、消息路由等 | server + cloudflare | 中 |
-| P1 | 定义 Repository 接口 | server + cloudflare | 小 |
-| P2 | Web 端引入 `@crewden/shared` 类型 | web | 小 |
-| P3 | 两端 Repository 实现（SQLite + Durable Object） | server + cloudflare | 大 |
+> **v2.4.1 进度（2026-05-09）**：P0 部分完成——Repository 层已提取（Task/Channel/Message/Thread/Project/ContextPackageRef），db.ts 从 ~2200 降至 ~1800 行。P1 部分完成——task 状态机已提取到 `hub-core/src/taskStateMachine.ts`。剩余项见下方。
+
+| 优先级 | 改造项 | 影响范围 | 预估工作量 | v2.4.1 状态 |
+|---|---|---|---|---|
+| P0 | 拆分 `server/db.ts` → Repository + Service | server 全部路由 | 大 | 🟡 部分完成 |
+| P1 | 扩展 `hub-core`，提取 task 状态机、Agent 委派、消息路由等 | server + cloudflare | 中 | 🟡 部分完成 |
+| P1 | 定义 Repository 接口 | server + cloudflare | 小 | ⬜ 未开始 |
+| P2 | Web 端引入 `@crewden/shared` 类型 | web | 小 | ⬜ 未开始 |
+| P3 | 两端 Repository 实现（SQLite + Durable Object） | server + cloudflare | 大 | ⬜ 未开始 |
 
 ---
 
 ## 五、总结
 
-### 5.1 当前架构评分
+### 5.1 当前架构评分（v2.4.1 更新）
 
 | 维度 | 评分 | 说明 |
 |---|---|---|
 | **分层清晰度** | ⭐⭐⭐⭐ | 6 个包职责分明，依赖方向正确 |
 | **单向依赖** | ⭐⭐⭐⭐⭐ | 所有箭头指向 `shared`，零反向依赖 |
-| **关注点分离** | ⭐⭐⭐ | routes 和 DB 分离，但 db.ts 过重 |
-| **可测试性** | ⭐⭐⭐ | 无 Repository 接口，难以 mock 数据层 |
-| **可扩展性** | ⭐⭐⭐⭐ | 新增功能只需加 route + DB 函数，模式统一 |
-| **可维护性** | ⭐⭐⭐ | db.ts 2200 行将是长期维护负担 |
+| **关注点分离** | ⭐⭐⭐⭐ | Repository 层已提取，db.ts 已降到 ~1800 行 |
+| **可测试性** | ⭐⭐⭐ | 有 Repository 具体类但无接口，mock 仍不便 |
+| **可扩展性** | ⭐⭐⭐⭐ | 新增 repository + route 模式清晰 |
+| **可维护性** | ⭐⭐⭐⭐ | God File 问题缓解，剩余 Agent 逻辑等可继续提取 |
 
 ### 5.2 结论
 
 Crewden 的包级依赖架构**符合整洁架构的分层原则**——领域层在最底层，用例层居中，适配层在上，表示层独立。依赖方向严格单向，无循环引用。
 
-但在**模块内聚**层面存在改进空间：`server/db.ts` 是 God File，`hub-core` 过薄导致两端有重复实现。建议在后续迭代中逐步将业务逻辑提取到 `hub-core`，并引入 Repository 接口抽象数据访问层。
+v2.4.1 解决了两个 P0 问题：db.ts God File 通过 Repository 提取得到缓解（~2200→~1800 行），hub-core 薄层通过 task 状态机提取得到改善。剩余工作（Agent 生命周期提取、Repository 接口定义、Cloudflare 模块化）应在 v2.5-v2.6 中逐步完成。

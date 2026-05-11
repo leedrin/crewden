@@ -1,4 +1,4 @@
-import type { Task, TaskStatus, Message, SearchMessageResult, ThreadStatus, ThreadParticipant } from '@crewden/shared';
+import type { Task, TaskStatus, Message, SearchMessageResult, ThreadStatus, ThreadParticipant, MessageThread, Project, Channel } from '@crewden/shared';
 
 export type TaskPatch = Partial<Pick<Task, 'status' | 'assigneeId' | 'owner' | 'reviewer' | 'acceptanceCriteria' | 'definitionOfDone' | 'constraints' | 'dependsOn' | 'isBlocked' | 'blockedReason' | 'context'>>;
 export type NewTask = Omit<Task, 'createdAt' | 'updatedAt' | 'version' | 'type' | 'creator' | 'owner' | 'reviewer' | 'isBlocked' | 'projectId'> &
@@ -29,6 +29,22 @@ export interface TaskRepository {
   delete(id: string): Promise<boolean>;
 }
 
+export interface ProjectRepository {
+  list(): Promise<Project[]>;
+  getById(id: string): Promise<Project | undefined>;
+  getBySlug(slug: string): Promise<Project | undefined>;
+  create(input: Omit<Project, 'createdAt' | 'updatedAt'>): Promise<Project>;
+  update(id: string, patch: Partial<Omit<Project, 'id' | 'createdAt' | 'updatedAt'>>): Promise<Project | undefined>;
+  delete(id: string): Promise<boolean>;
+}
+
+export interface ChannelRepository {
+  list(filter?: { projectId?: string }): Promise<Channel[]>;
+  getById(id: string, filter?: { projectId?: string }): Promise<Channel | undefined>;
+  create(id: string, name: string, projectId: string): Promise<Channel>;
+  delete(id: string): Promise<boolean>;
+}
+
 export interface MessageRepository {
   listByChannel(channelId: string): Promise<Message[]>;
   listRecent(channelId: string, limit: number): Promise<Message[]>;
@@ -42,6 +58,7 @@ export interface ThreadRepository {
   getSummary(rootId: string): Promise<ThreadSummaryRow | undefined>;
   setThreadStatus(rootId: string, status: ThreadStatus): Promise<ThreadSummaryRow | undefined>;
   refreshSummary(rootId: string, options?: { status?: ThreadStatus; forceSummary?: boolean }): Promise<ThreadSummaryRow | undefined>;
+  getThread(rootId: string): Promise<MessageThread | undefined>;
 }
 
 export interface ContextPackageRefRepository {
