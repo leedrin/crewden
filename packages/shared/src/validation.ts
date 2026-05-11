@@ -37,6 +37,90 @@ export const WorkItemPrioritySchema = z.enum(['low', 'normal', 'high', 'urgent']
 export const TaskProgressEventTypeSchema = z.enum(['claimed', 'started', 'heartbeat', 'blocked', 'handoff', 'completed', 'escalated']);
 export const ReviewStatusSchema = z.enum(['requested', 'changes_requested', 'approved', 'cancelled']);
 export const ReminderStatusSchema = z.enum(['pending', 'triggered', 'cancelled']);
+
+export const PlanStatusSchema = z.enum(['draft', 'submitted', 'approved', 'rejected']);
+
+export const PlanStepSchema = z.object({
+  description: z.string().min(1),
+  verification: z.string().min(1),
+  estimatedTools: z.array(z.string()).default([]),
+});
+
+export const PlanRiskSchema = z.object({
+  description: z.string().min(1),
+  mitigation: z.string().min(1),
+});
+
+export const PlanSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().optional(),
+  taskId: z.string().min(1),
+  status: PlanStatusSchema,
+  approach: z.string().min(1),
+  steps: z.array(PlanStepSchema).min(1),
+  risks: z.array(PlanRiskSchema).optional(),
+  filesToModify: z.array(z.string()).optional(),
+  filesToCreate: z.array(z.string()).optional(),
+  testsToAdd: z.array(z.string()).optional(),
+  authorType: ActorTypeSchema,
+  authorId: z.string().min(1),
+  reviewerType: ActorTypeSchema.optional(),
+  reviewerId: z.string().optional(),
+  reviewerApproved: z.boolean().optional(),
+  reviewerComment: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const ApprovalTypeSchema = z.enum(['task_execution', 'architecture_decision', 'pr_merge', 'deploy_staging', 'deploy_production']);
+
+export const ApprovalStatusSchema = z.enum(['pending', 'approved', 'rejected', 'expired']);
+
+export const ApprovalSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().optional(),
+  type: ApprovalTypeSchema,
+  targetId: z.string().min(1),
+  status: ApprovalStatusSchema,
+  requestedByType: ActorTypeSchema,
+  requestedById: z.string().min(1),
+  approvedByType: ActorTypeSchema.optional(),
+  approvedById: z.string().optional(),
+  reason: z.string().min(1),
+  context: z.string().optional(),
+  requestedAt: z.string(),
+  respondedAt: z.string().optional(),
+  expiresAt: z.string().optional(),
+  comment: z.string().optional(),
+});
+
+export const CreatePlanRequestSchema = z.object({
+  projectId: z.string().optional(),
+  approach: z.string().min(1),
+  steps: z.array(PlanStepSchema).min(1),
+  risks: z.array(PlanRiskSchema).optional(),
+  filesToModify: z.array(z.string()).optional(),
+  filesToCreate: z.array(z.string()).optional(),
+  testsToAdd: z.array(z.string()).optional(),
+});
+
+export const CreateApprovalRequestSchema = z.object({
+  projectId: z.string().optional(),
+  type: ApprovalTypeSchema,
+  targetId: z.string().min(1),
+  reason: z.string().min(1),
+  context: z.string().optional(),
+  expiresAt: z.string().optional(),
+});
+
+export const RespondApprovalRequestSchema = z.object({
+  comment: z.string().optional(),
+});
+
+export const ReviewPlanRequestSchema = z.object({
+  approved: z.boolean(),
+  comment: z.string().optional(),
+});
 export const KnowledgeKindSchema = z.enum(['decision', 'project_archive', 'user_preference', 'runbook', 'learning', 'artifact']);
 export const KnowledgeStatusSchema = z.enum(['active', 'stale', 'conflict', 'archived']);
 export const DecisionStatusSchema = z.enum(['proposed', 'accepted', 'deprecated', 'superseded']);
@@ -1052,6 +1136,10 @@ export type InternalGoalCreateRequest = z.infer<typeof InternalGoalCreateRequest
 export type InternalGoalCreateTasksRequest = z.infer<typeof InternalGoalCreateTasksRequestSchema>;
 export type InternalGoalAlignRequest = z.infer<typeof InternalGoalAlignRequestSchema>;
 export type InternalGoalAlignmentPatchRequest = z.infer<typeof InternalGoalAlignmentPatchRequestSchema>;
+export type CreatePlanRequest = z.infer<typeof CreatePlanRequestSchema>;
+export type CreateApprovalRequest = z.infer<typeof CreateApprovalRequestSchema>;
+export type RespondApprovalRequest = z.infer<typeof RespondApprovalRequestSchema>;
+export type ReviewPlanRequest = z.infer<typeof ReviewPlanRequestSchema>;
 
 export const ServerToDaemonSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ping') }),

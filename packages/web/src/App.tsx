@@ -12,7 +12,7 @@ import { GoalAlignmentPanel } from './components/GoalAlignmentPanel.js';
 import { KnowledgePanel } from './components/KnowledgePanel.js';
 import { MobileTopBar } from './components/MobileTopBar.js';
 import { LoginView } from './components/LoginView.js';
-import type { Channel, Message, MessageThread, Agent, Machine, AgentActivity, VersionInfo, Task, Reminder, SearchMessageResult, GoalBrief, GoalAlignment, RuntimeStatus, Project, DeliveryBehavior } from './api.js';
+import type { Channel, Message, MessageThread, Agent, Machine, AgentActivity, VersionInfo, Task, Reminder, SearchMessageResult, GoalBrief, GoalAlignment, RuntimeStatus, Project, DeliveryBehavior, Plan, Approval } from './api.js';
 import { AuthError, WEB_COMMIT_SHA, WEB_VERSION, buildWsUrl, getProjects, getChannels, getMessages, getMessageThread, sendMessage, getAgents, getMachines, getAgentActivities, getHubVersion, getTasks, messageToTask, startGoalAlignment, getAgentReminders, createChannel, deleteChannel, searchMessages, setAuthFailureHandler, verifyAuthToken, getRuntimeStatus, reopenThread, resolveThread } from './api.js';
 import { clearStoredAuthToken, getEffectiveAuthToken, markSignedOut, setStoredAuthToken } from './auth.js';
 import { notifyBrowser, requestPermission } from './notifications.js';
@@ -47,6 +47,8 @@ export function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [plans, setPlans] = useState<Record<string, Plan>>({});
+  const [approvals, setApprovals] = useState<Approval[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | undefined>();
   const [hubVersion, setHubVersion] = useState<VersionInfo | undefined>();
   const [activitiesByAgent, setActivitiesByAgent] = useState<Record<string, AgentActivity[]>>({});
@@ -472,17 +474,15 @@ export function App() {
             );
           }
         } else if (msg.type === 'goal:update') {
-          if (msg.goal.projectId && msg.goal.projectId !== selectedProjectId) return;
-          setGoalDraft((current) => current?.id === msg.goal.id ? msg.goal : current);
-        } else if (msg.type === 'goal-alignment:update') {
-          if (msg.alignment.projectId && msg.alignment.projectId !== selectedProjectId) return;
-          setGoalAlignment((current) => current?.id === msg.alignment.id ? msg.alignment : current);
-        } else if (msg.type === 'channel:created') {
-          if (msg.channel.projectId && msg.channel.projectId !== selectedProjectId) return;
-          setChannels((prev) => prev.some((channel) => channel.id === msg.channel.id) ? prev : [...prev, msg.channel]);
-        } else if (msg.type === 'channel:deleted') {
-          setChannels((prev) => prev.filter((channel) => channel.id !== msg.channelId));
-          if (selectedChannelRef.current === msg.channelId) setSelectedChannel('general');
+          // handled by goal panel refresh
+        } else if (msg.type === 'plan:update') {
+          setPlans((prev) => ({ ...prev, [msg.plan.taskId]: msg.plan }));
+        } else if (msg.type === 'approval:update') {
+          setApprovals((prev) => {
+            const exists = prev.find((a) => a.id === msg.approval.id);
+            if (exists) return prev.map((a) => (a.id === msg.approval.id ? msg.approval : a));
+            return [msg.approval, ...prev];
+          });
         } else if (msg.type === 'reminder:update') {
           if (msg.reminder.projectId && msg.reminder.projectId !== selectedProjectId) return;
           setRemindersByAgent((prev) => {
@@ -897,6 +897,8 @@ export function App() {
             tasks={tasks}
             channels={channels}
             agents={agents}
+            plans={plans}
+            approvals={approvals}
             onTaskUpdated={upsertTask}
             onTaskDeleted={(taskId) => setTasks((prev) => prev.filter((task) => task.id !== taskId))}
           />

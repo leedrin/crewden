@@ -49,6 +49,12 @@ import {
   TaskSchema,
   AgentPermissionsSchema,
   ContextPackageSchema,
+  PlanSchema,
+  ApprovalSchema,
+  CreatePlanRequestSchema,
+  CreateApprovalRequestSchema,
+  ReviewPlanRequestSchema,
+  RespondApprovalRequestSchema,
 } from '../src/validation.js';
 import { APP_VERSION, createVersionInfo } from '../src/version.js';
 
@@ -659,5 +665,137 @@ describe('ContextPackage staleness fields', () => {
       expect(result.data.stale).toBe(false);
       expect(result.data.staleReason).toBeUndefined();
     }
+  });
+});
+
+describe('Plan schema', () => {
+  const basePlan = {
+    id: 'plan-1',
+    taskId: 'task-1',
+    status: 'draft',
+    approach: 'Refactor the module',
+    steps: [
+      { description: 'Step 1', verification: 'Test passes', estimatedTools: ['editor'] },
+    ],
+    authorType: 'agent' as const,
+    authorId: 'agent-1',
+    createdAt: '2026-05-10T00:00:00Z',
+    updatedAt: '2026-05-10T00:00:00Z',
+  };
+
+  it('validates a minimal plan', () => {
+    const result = PlanSchema.safeParse(basePlan);
+    expect(result.success).toBe(true);
+  });
+
+  it('validates a full plan with optional fields', () => {
+    const result = PlanSchema.safeParse({
+      ...basePlan,
+      projectId: 'proj-1',
+      risks: [{ description: 'Breaking change', mitigation: 'Add backward compat' }],
+      filesToModify: ['src/foo.ts'],
+      filesToCreate: ['src/bar.ts'],
+      testsToAdd: ['test/bar.test.ts'],
+      reviewerType: 'agent',
+      reviewerId: 'reviewer-1',
+      reviewerApproved: true,
+      reviewerComment: 'LGTM',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects plan with empty approach', () => {
+    const result = PlanSchema.safeParse({ ...basePlan, approach: '' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects plan with no steps', () => {
+    const result = PlanSchema.safeParse({ ...basePlan, steps: [] });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects invalid plan status', () => {
+    const result = PlanSchema.safeParse({ ...basePlan, status: 'unknown' });
+    expect(result.success).toBe(false);
+  });
+
+  it('CreatePlanRequestSchema validates correctly', () => {
+    const result = CreatePlanRequestSchema.safeParse({
+      approach: 'Do the thing',
+      steps: [{ description: 'Step 1', verification: 'Passes', estimatedTools: [] }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('ReviewPlanRequestSchema validates approve', () => {
+    const result = ReviewPlanRequestSchema.safeParse({ approved: true, comment: 'Looks good' });
+    expect(result.success).toBe(true);
+  });
+
+  it('ReviewPlanRequestSchema validates reject without comment', () => {
+    const result = ReviewPlanRequestSchema.safeParse({ approved: false });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('Approval schema', () => {
+  const baseApproval = {
+    id: 'approval-1',
+    type: 'task_execution' as const,
+    targetId: 'task-1',
+    status: 'pending',
+    requestedByType: 'agent' as const,
+    requestedById: 'agent-1',
+    reason: 'P0 task requires human approval',
+    requestedAt: '2026-05-10T00:00:00Z',
+  };
+
+  it('validates a minimal approval', () => {
+    const result = ApprovalSchema.safeParse(baseApproval);
+    expect(result.success).toBe(true);
+  });
+
+  it('validates a full approval with response', () => {
+    const result = ApprovalSchema.safeParse({
+      ...baseApproval,
+      projectId: 'proj-1',
+      approvedByType: 'human',
+      approvedById: 'user-1',
+      context: 'Additional context',
+      respondedAt: '2026-05-10T01:00:00Z',
+      expiresAt: '2026-05-11T00:00:00Z',
+      comment: 'Approved after review',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects invalid approval type', () => {
+    const result = ApprovalSchema.safeParse({ ...baseApproval, type: 'unknown' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects invalid approval status', () => {
+    const result = ApprovalSchema.safeParse({ ...baseApproval, status: 'unknown' });
+    expect(result.success).toBe(false);
+  });
+
+  it('CreateApprovalRequestSchema validates correctly', () => {
+    const result = CreateApprovalRequestSchema.safeParse({
+      type: 'deploy_production',
+      targetId: 'task-1',
+      reason: 'Production deployment',
+      expiresAt: '2026-05-12T00:00:00Z',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('RespondApprovalRequestSchema validates with comment', () => {
+    const result = RespondApprovalRequestSchema.safeParse({ comment: 'Rejected due to risk' });
+    expect(result.success).toBe(true);
+  });
+
+  it('RespondApprovalRequestSchema validates without comment', () => {
+    const result = RespondApprovalRequestSchema.safeParse({});
+    expect(result.success).toBe(true);
   });
 });

@@ -285,3 +285,42 @@ export const projects = sqliteTable('projects', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
+
+export const taskPlans = sqliteTable('task_plans', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
+  taskId: text('task_id').notNull(),
+  status: text('status').notNull().default('draft'),
+  approach: text('approach').notNull(),
+  steps: text('steps').notNull(),
+  risks: text('risks'),
+  filesToModify: text('files_to_modify'),
+  filesToCreate: text('files_to_create'),
+  testsToAdd: text('tests_to_add'),
+  authorType: text('author_type').notNull(),
+  authorId: text('author_id').notNull(),
+  reviewerType: text('reviewer_type'),
+  reviewerId: text('reviewer_id'),
+  reviewerApproved: integer('reviewer_approved', { mode: 'boolean' }),
+  reviewerComment: text('reviewer_comment'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const approvals = sqliteTable('approvals', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().default('default'),
+  type: text('type').notNull(),
+  targetId: text('target_id').notNull(),
+  status: text('status').notNull().default('pending'),
+  requestedByType: text('requested_by_type').notNull(),
+  requestedById: text('requested_by_id').notNull(),
+  approvedByType: text('approved_by_type'),
+  approvedById: text('approved_by_id'),
+  reason: text('reason').notNull(),
+  context: text('context'),
+  requestedAt: text('requested_at').notNull(),
+  respondedAt: text('responded_at'),
+  expiresAt: text('expires_at'),
+  comment: text('comment'),
+});

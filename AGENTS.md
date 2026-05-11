@@ -39,14 +39,18 @@ The project goal is to build an agent-first company organization.
 
 ## Branch Workflow
 
-Never implement changes directly on `main`.
+**Never implement changes directly on `main`.** No exceptions.
+
+`main` is a protected branch. All development happens on feature branches
+(merged into `feat/slack-like-ai-agent` or directly into `main` via `--no-ff`).
+If you find yourself on `main` with uncommitted changes, stop immediately,
+stash or reset, and switch to a proper feature branch before continuing.
 
 For every development task:
 
-1. Start from a clean working tree.
-2. Ensure the current branch is `main`.
-3. Pull or fetch the latest remote state when network access is available.
-4. Create a new task branch before editing files.
+1. Start from a clean working tree on `feat/slack-like-ai-agent` (or `main`).
+2. Pull or fetch the latest remote state when network access is available.
+3. Create a new task branch before editing files.
 5. Make all code, test, and documentation changes on that branch.
 6. Run the required verification commands.
 7. Commit on the task branch.
