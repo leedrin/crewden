@@ -1,7 +1,18 @@
 import { useMemo, useState } from 'react';
 import type React from 'react';
 import type { Agent, Channel, Task, TaskStatus, Plan, Approval } from '../api.js';
-import { createTask, deleteTask, patchTask, regenerateContextPackage } from '../api.js';
+import {
+  createTask,
+  createTaskPlan,
+  deleteTask,
+  patchTask,
+  regenerateContextPackage,
+  submitTaskPlan,
+  approveTaskPlan,
+  rejectTaskPlan,
+  approveApproval,
+  rejectApproval,
+} from '../api.js';
 
 type Props = {
   projectId: string;
@@ -10,6 +21,8 @@ type Props = {
   agents: Agent[];
   plans?: Record<string, Plan>;
   approvals?: Approval[];
+  onPlanUpdated?: (plan: Plan) => void;
+  onApprovalUpdated?: (approval: Approval) => void;
   onTaskUpdated: (task: Task) => void;
   onTaskDeleted: (taskId: string) => void;
 };
@@ -51,7 +64,7 @@ const COLUMNS: Array<{ id: BoardColumnId; label: string; statuses: TaskStatus[];
   { id: 'done', label: 'Done', statuses: ['done', 'cancelled'], defaultStatus: 'done', color: '#86efac' },
 ];
 
-export function TaskBoard({ projectId, tasks, channels, agents, plans = {}, approvals = [], onTaskUpdated, onTaskDeleted }: Props) {
+export function TaskBoard({ projectId, tasks, channels, agents, plans = {}, approvals = [], onPlanUpdated, onApprovalUpdated, onTaskUpdated, onTaskDeleted }: Props) {
   const [view, setView] = useState<'board' | 'list'>(() => (typeof window !== 'undefined' && window.innerWidth < 760 ? 'list' : 'board'));
   const [channelId, setChannelId] = useState('');
   const [title, setTitle] = useState('');
@@ -167,7 +180,7 @@ export function TaskBoard({ projectId, tasks, channels, agents, plans = {}, appr
                 {!isCollapsed ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {filteredTasks.map((task) => (
-                      <TaskCard key={task.id} task={task} agents={agents} channels={channels} plan={plans[task.id]} pendingApprovals={approvals.filter(a => a.targetId === task.id && a.status === 'pending')} onStatus={handleStatus} onDelete={handleDelete} onPatch={onTaskUpdated} />
+                      <TaskCard key={task.id} task={task} agents={agents} channels={channels} plan={plans[task.id]} pendingApprovals={approvals.filter(a => a.targetId === task.id && a.status === 'pending')} onStatus={handleStatus} onDelete={handleDelete} onPatch={onTaskUpdated} onPlanUpdated={onPlanUpdated} onApprovalUpdated={onApprovalUpdated} />
                     ))}
                   </div>
                 ) : null}
@@ -178,7 +191,7 @@ export function TaskBoard({ projectId, tasks, channels, agents, plans = {}, appr
       ) : (
         <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
           {visibleTasks.map((task) => (
-            <TaskCard key={task.id} task={task} agents={agents} channels={channels} plan={plans[task.id]} pendingApprovals={approvals.filter(a => a.targetId === task.id && a.status === 'pending')} onStatus={handleStatus} onDelete={handleDelete} onPatch={onTaskUpdated} compact />
+            <TaskCard key={task.id} task={task} agents={agents} channels={channels} plan={plans[task.id]} pendingApprovals={approvals.filter(a => a.targetId === task.id && a.status === 'pending')} onStatus={handleStatus} onDelete={handleDelete} onPatch={onTaskUpdated} onPlanUpdated={onPlanUpdated} onApprovalUpdated={onApprovalUpdated} compact />
           ))}
         </div>
       )}
@@ -243,7 +256,7 @@ function ContextPackagePreview({ task, onPatch }: { task: Task; onPatch: (task: 
   );
 }
 
-function TaskCard({ task, agents, channels, plan, pendingApprovals, onStatus, onDelete, onPatch, compact = false }: {
+function TaskCard({ task, agents, channels, plan, pendingApprovals, onStatus, onDelete, onPatch, onPlanUpdated, onApprovalUpdated, compact = false }: {
   task: Task;
   agents: Agent[];
   channels: Channel[];
@@ -252,6 +265,8 @@ function TaskCard({ task, agents, channels, plan, pendingApprovals, onStatus, on
   onStatus: (task: Task, status: TaskStatus) => void;
   onDelete: (task: Task) => void;
   onPatch: (task: Task) => void;
+  onPlanUpdated?: (plan: Plan) => void;
+  onApprovalUpdated?: (approval: Approval) => void;
   compact?: boolean;
 }) {
   const assignee = agents.find((agent) => agent.id === task.assigneeId);
@@ -275,6 +290,37 @@ function TaskCard({ task, agents, channels, plan, pendingApprovals, onStatus, on
         };
     const patched = await patchTask(task.id, payload);
     onPatch(patched);
+  }
+
+  async function handleCreatePlan() {
+    const approach = window.prompt('Plan approach');
+    if (!approach?.trim()) return;
+    const planCreated = await createTaskPlan(task.id, {
+      approach: approach.trim(),
+      steps: [{ description: 'Implement task scope', verification: 'Relevant tests pass', estimatedTools: ['editor', 'tests'] }],
+    });
+    onPlanUpdated?.(planCreated);
+  }
+
+  async function handleSubmitPlan() {
+    const updated = await submitTaskPlan(task.id);
+    onPlanUpdated?.(updated);
+  }
+
+  async function handleReviewPlan(approved: boolean) {
+    const comment = window.prompt(approved ? 'Approval comment (optional)' : 'Rejection reason (optional)') ?? undefined;
+    const updated = approved
+      ? await approveTaskPlan(task.id, { comment })
+      : await rejectTaskPlan(task.id, { comment });
+    onPlanUpdated?.(updated);
+  }
+
+  async function handleApprovalDecision(approvalId: string, approved: boolean) {
+    const comment = window.prompt(approved ? 'Approval comment (optional)' : 'Rejection reason (optional)') ?? undefined;
+    const updated = approved
+      ? await approveApproval(approvalId, { comment })
+      : await rejectApproval(approvalId, { comment });
+    onApprovalUpdated?.(updated);
   }
   return (
     <article
@@ -302,6 +348,38 @@ function TaskCard({ task, agents, channels, plan, pendingApprovals, onStatus, on
         {reviewer ? <span>REVIEW: @{reviewer.displayName ?? reviewer.name}</span> : null}
         {task.context?.goalObjective ? <span style={{ fontWeight: 700 }}>GOAL: {task.context.goalObjective}</span> : null}
       </div>
+      {task.type !== 'docs' && task.type !== 'research' ? (
+        <div style={{ marginTop: 8, border: '1.5px dashed #4b5563', padding: 7, fontSize: 11, lineHeight: 1.35, background: '#f8fafc' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <strong>PLAN</strong>
+            {!plan ? (
+              <button onClick={() => void handleCreatePlan()} style={buttonStyle('#0f172a', '#fff')}>CREATE</button>
+            ) : plan.status === 'draft' ? (
+              <button onClick={() => void handleSubmitPlan()} style={buttonStyle('#0f766e', '#fff')}>SUBMIT</button>
+            ) : plan.status === 'submitted' ? (
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => void handleReviewPlan(true)} style={buttonStyle('#166534', '#fff')}>APPROVE</button>
+                <button onClick={() => void handleReviewPlan(false)} style={buttonStyle('#b91c1c', '#fff')}>REJECT</button>
+              </div>
+            ) : null}
+          </div>
+          {plan ? <div style={{ marginTop: 4, color: '#334155' }}>{plan.approach}</div> : <div style={{ marginTop: 4, color: '#64748b' }}>No plan yet</div>}
+        </div>
+      ) : null}
+      {pendingApprovals.length > 0 ? (
+        <div style={{ marginTop: 8, border: '1.5px dashed #a16207', padding: 7, fontSize: 11, lineHeight: 1.35, background: '#fffbeb' }}>
+          <strong>APPROVALS</strong>
+          {pendingApprovals.map((approval) => (
+            <div key={approval.id} style={{ marginTop: 6 }}>
+              <div style={{ marginBottom: 4 }}>{approval.reason}</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => void handleApprovalDecision(approval.id, true)} style={buttonStyle('#166534', '#fff')}>APPROVE</button>
+                <button onClick={() => void handleApprovalDecision(approval.id, false)} style={buttonStyle('#b91c1c', '#fff')}>REJECT</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
         <span style={{ fontSize: 11, fontWeight: 700 }}>ASSIGN</span>
         <select

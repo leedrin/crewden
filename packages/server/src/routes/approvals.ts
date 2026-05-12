@@ -9,8 +9,9 @@ function getApprovalRepo() {
 }
 
 export async function approvalRoutes(app: FastifyInstance) {
-  app.get<{ Querystring: { targetId?: string; type?: string; status?: string } }>('/api/approvals', async (req) => {
+  app.get<{ Querystring: { projectId?: string; targetId?: string; type?: string; status?: string } }>('/api/approvals', async (req) => {
     return getApprovalRepo().list({
+      projectId: req.query.projectId,
       targetId: req.query.targetId,
       type: req.query.type as ApprovalType | undefined,
       status: req.query.status as ApprovalStatus | undefined,
@@ -36,8 +37,8 @@ export async function approvalRoutes(app: FastifyInstance) {
     return reply.status(201).send(approval);
   });
 
-  app.get('/api/approvals/pending', async () => {
-    return getApprovalRepo().list({ status: 'pending' });
+  app.get<{ Querystring: { projectId?: string } }>('/api/approvals/pending', async (req) => {
+    return getApprovalRepo().list({ projectId: req.query.projectId, status: 'pending' });
   });
 
   app.post<{ Params: { id: string } }>('/api/approvals/:id/approve', async (req, reply) => {
