@@ -1,4 +1,19 @@
 import { getEffectiveAuthToken } from './auth.js';
+import type {
+  Task as SharedTask,
+  TaskContext as SharedTaskContext,
+  TaskProgressEvent as SharedTaskProgressEvent,
+  TaskReview as SharedTaskReview,
+  TaskStatus as SharedTaskStatus,
+  TaskType as SharedTaskType,
+  Plan as SharedPlan,
+  PlanRisk as SharedPlanRisk,
+  PlanStatus as SharedPlanStatus,
+  PlanStep as SharedPlanStep,
+  Approval as SharedApproval,
+  ApprovalStatus as SharedApprovalStatus,
+  ApprovalType as SharedApprovalType,
+} from '@crewden/shared';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '');
 export const WEB_VERSION = (import.meta.env.VITE_APP_VERSION ?? '2.0.0').trim();
@@ -161,42 +176,18 @@ export type RuntimeStatus = {
   }>;
 };
 export type VersionInfo = { component: string; version: string; commit?: string; build?: string };
-export type TaskStatus = 'backlog' | 'spec_needed' | 'ready' | 'assigned' | 'in_progress' | 'in_review' | 'changes_requested' | 'qa' | 'done' | 'cancelled';
-export type TaskType = 'feature' | 'bug' | 'ops' | 'research' | 'review' | 'handoff';
+export type TaskStatus = SharedTaskStatus;
+export type TaskType = SharedTaskType;
 export type GoalBriefStatus = 'draft' | 'confirmed' | 'cancelled' | 'completed';
 export type GoalAlignmentStatus = 'needs_clarification' | 'awaiting_confirmation' | 'confirmed' | 'cancelled';
 export type GoalAlignmentRiskLevel = 'low' | 'medium' | 'high';
-export type TaskProgressEvent = { id: string; taskId: string; agentId: string; type: 'claimed' | 'started' | 'heartbeat' | 'blocked' | 'handoff' | 'completed' | 'escalated'; detail: string; createdAt: string };
-export type TaskReview = { id: string; taskId: string; requesterAgentId?: string; reviewerAgentId?: string; status: 'requested' | 'changes_requested' | 'approved' | 'cancelled'; evidence: string[]; checklist: Array<{ label: string; checked: boolean }>; comment?: string; createdAt: string; updatedAt: string };
+export type TaskProgressEvent = SharedTaskProgressEvent;
+export type TaskReview = SharedTaskReview;
 export type ContextSectionSource = 'task' | 'decision' | 'document' | 'thread_summary' | 'parent_task_result';
 export type ContextSection = { priority: number; source: ContextSectionSource; title: string; content: string; tokenEstimate: number };
 export type ContextPackage = { taskId: string; generatedAt: string; sections: ContextSection[]; totalTokens: number; agentMaxTokens: number; truncationApplied: boolean };
-export type TaskContext = { goalId?: string; goalObjective?: string; goal?: string; background?: string; acceptanceCriteria?: string[]; constraints?: string[]; assumptions?: string[]; risks?: string[]; dependencies?: string[]; blockedByTaskIds?: string[]; sourceMessageIds?: string[]; artifacts?: string[]; requesterAgentId?: string; previousAgentId?: string; handoffNotes?: string[]; privateNotes?: string[]; claimedByAgentId?: string; blockedReason?: string; blockedNeeds?: string; escalatedReason?: string; progressEvents?: TaskProgressEvent[]; reviewerAgentId?: string; evidence?: string[]; acceptanceChecklist?: string[]; reviewIds?: string[]; reviewNotes?: string[]; reviews?: TaskReview[]; relatedDecisionIds?: string[]; relatedDocumentIds?: string[]; contextPackage?: ContextPackage };
-export type Task = {
-  id: string;
-  channelId: string;
-  messageId?: string;
-  title: string;
-  status: TaskStatus;
-  type: TaskType;
-  creatorName: string;
-  creator: Actor;
-  assigneeId?: string;
-  owner?: Actor;
-  reviewer?: Actor;
-  acceptanceCriteria?: string[];
-  definitionOfDone?: string[];
-  constraints?: string[];
-  dependsOn?: string[];
-  isBlocked: boolean;
-  blockedReason?: string;
-  sourceChannelId?: string;
-  sourceThreadId?: string;
-  context?: TaskContext;
-  version: number;
-  createdAt: string;
-  updatedAt: string;
-};
+export type TaskContext = SharedTaskContext;
+export type Task = SharedTask;
 export type GoalBrief = { id: string; channelId: string; sourceMessageId?: string; requesterName: string; objective: string; background: string[]; successCriteria: string[]; constraints: string[]; assumptions: string[]; risks: string[]; status: GoalBriefStatus; createdAt: string; updatedAt: string };
 export type GoalAlignmentTaskDraft = { title: string; assigneeId?: string; dependencies?: string[]; acceptanceCriteria?: string[]; artifacts?: string[]; role?: 'owner' | 'reviewer' | 'support' };
 export type GoalAlignment = { id: string; channelId: string; threadRootId: string; sourceMessageId: string; goalId?: string; status: GoalAlignmentStatus; objective: string; questions: string[]; answers: string[]; successCriteria: string[]; constraints: string[]; planSummary?: string; taskDrafts: GoalAlignmentTaskDraft[]; recommendedAgentIds: string[]; reviewerAgentIds: string[]; recommendationReasons: Record<string, string>; gaps: string[]; riskLevel: GoalAlignmentRiskLevel; createdAt: string; updatedAt: string };
@@ -210,49 +201,13 @@ export type KnowledgeStatus = 'active' | 'stale' | 'conflict' | 'archived';
 export type KnowledgeEntry = { id: string; kind: KnowledgeKind; title: string; summary: string; body: string; tags: string[]; sourceRefs: string[]; ownerAgentId?: string; reviewerAgentId?: string; status: KnowledgeStatus; createdAt: string; updatedAt: string };
 export type KnowledgeSearchResult = { entry: KnowledgeEntry; score?: number; reason?: string };
 
-export type PlanStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
-export type PlanStep = { description: string; verification: string; estimatedTools: string[] };
-export type PlanRisk = { description: string; mitigation: string };
-export type Plan = {
-  id: string;
-  projectId?: string;
-  taskId: string;
-  status: PlanStatus;
-  approach: string;
-  steps: PlanStep[];
-  risks?: PlanRisk[];
-  filesToModify?: string[];
-  filesToCreate?: string[];
-  testsToAdd?: string[];
-  authorType: ActorType;
-  authorId: string;
-  reviewerType?: ActorType;
-  reviewerId?: string;
-  reviewerApproved?: boolean;
-  reviewerComment?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type ApprovalType = 'task_execution' | 'architecture_decision' | 'pr_merge' | 'deploy_staging' | 'deploy_production';
-export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
-export type Approval = {
-  id: string;
-  projectId?: string;
-  type: ApprovalType;
-  targetId: string;
-  status: ApprovalStatus;
-  requestedByType: ActorType;
-  requestedById: string;
-  approvedByType?: ActorType;
-  approvedById?: string;
-  reason: string;
-  context?: string;
-  requestedAt: string;
-  respondedAt?: string;
-  expiresAt?: string;
-  comment?: string;
-};
+export type PlanStatus = SharedPlanStatus;
+export type PlanStep = SharedPlanStep;
+export type PlanRisk = SharedPlanRisk;
+export type Plan = SharedPlan;
+export type ApprovalType = SharedApprovalType;
+export type ApprovalStatus = SharedApprovalStatus;
+export type Approval = SharedApproval;
 
 export class AuthError extends Error {
   constructor(message = 'Unauthorized') {
@@ -641,8 +596,29 @@ export async function reviewTaskPlan(taskId: string, data: { approved: boolean; 
   return r.json();
 }
 
-export async function getApprovals(filter: { targetId?: string; type?: ApprovalType; status?: ApprovalStatus } = {}): Promise<Approval[]> {
+export async function approveTaskPlan(taskId: string, data: { comment?: string } = {}): Promise<Plan> {
+  const r = await apiFetch(`${API_BASE}/api/tasks/${taskId}/plan/approve`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Approve plan failed');
+  return r.json();
+}
+
+export async function rejectTaskPlan(taskId: string, data: { comment?: string } = {}): Promise<Plan> {
+  const r = await apiFetch(`${API_BASE}/api/tasks/${taskId}/plan/reject`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Reject plan failed');
+  return r.json();
+}
+
+export async function getApprovals(filter: { projectId?: string; targetId?: string; type?: ApprovalType; status?: ApprovalStatus } = {}): Promise<Approval[]> {
   const params = new URLSearchParams();
+  if (filter.projectId) params.set('projectId', filter.projectId);
   if (filter.targetId) params.set('targetId', filter.targetId);
   if (filter.type) params.set('type', filter.type);
   if (filter.status) params.set('status', filter.status);
@@ -652,8 +628,9 @@ export async function getApprovals(filter: { targetId?: string; type?: ApprovalT
   return r.json();
 }
 
-export async function getPendingApprovals(): Promise<Approval[]> {
-  const r = await apiFetch(`${API_BASE}/api/approvals/pending`, { headers: authHeaders() });
+export async function getPendingApprovals(projectId?: string): Promise<Approval[]> {
+  const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+  const r = await apiFetch(`${API_BASE}/api/approvals/pending${qs}`, { headers: authHeaders() });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? 'Get pending approvals failed');
   return r.json();
 }

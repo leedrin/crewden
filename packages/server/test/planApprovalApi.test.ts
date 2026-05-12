@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { resetStore } from '../src/db.js';
+import { expireDueApprovals } from '../src/reminders.js';
 import type { FastifyInstance } from 'fastify';
 
 describe('Plan API', () => {
@@ -170,6 +171,29 @@ describe('Plan API', () => {
     expect(plan.reviewerComment).toBe('LGTM');
   });
 
+  it('supports dedicated approve endpoint', async () => {
+    await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${taskId}/plan`,
+      payload: {
+        approach: 'My plan',
+        steps: [{ description: 'Do it', verification: 'Works', estimatedTools: [] }],
+      },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${taskId}/plan/submit`,
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${taskId}/plan/approve`,
+      payload: { comment: 'Approved via endpoint' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe('approved');
+    expect(res.json().reviewerComment).toBe('Approved via endpoint');
+  });
+
   it('rejects a submitted plan', async () => {
     await app.inject({
       method: 'POST',
@@ -192,6 +216,29 @@ describe('Plan API', () => {
     const plan = res.json();
     expect(plan.status).toBe('rejected');
     expect(plan.reviewerApproved).toBe(false);
+  });
+
+  it('supports dedicated reject endpoint', async () => {
+    await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${taskId}/plan`,
+      payload: {
+        approach: 'My plan',
+        steps: [{ description: 'Do it', verification: 'Works', estimatedTools: [] }],
+      },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${taskId}/plan/submit`,
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${taskId}/plan/reject`,
+      payload: { comment: 'Rejected via endpoint' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe('rejected');
+    expect(res.json().reviewerComment).toBe('Rejected via endpoint');
   });
 
   it('rejects reviewing non-submitted plan', async () => {
@@ -346,5 +393,24 @@ describe('Approval API', () => {
       payload: {},
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('auto-expires overdue approvals', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/approvals',
+      payload: {
+        type: 'task_execution',
+        targetId: 'task-expire',
+        reason: 'Will expire',
+        expiresAt: '2000-01-01T00:00:00.000Z',
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const expiredCount = await expireDueApprovals(new Date('2000-01-02T00:00:00.000Z'));
+    expect(expiredCount).toBe(1);
+    const list = await app.inject({ method: 'GET', url: '/api/approvals?status=expired' });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().some((approval: { targetId: string; status: string }) => approval.targetId === 'task-expire' && approval.status === 'expired')).toBe(true);
   });
 });

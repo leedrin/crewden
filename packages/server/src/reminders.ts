@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid';
-import { getStore } from './db.js';
+import { getDb, getStore } from './db.js';
 import { eventBus } from './events.js';
+import { SqliteApprovalRepository } from './repository/approval.repository.js';
 
 export async function triggerDueReminders(now = new Date()): Promise<number> {
   const store = getStore();
@@ -25,9 +26,19 @@ export async function triggerDueReminders(now = new Date()): Promise<number> {
   return triggered;
 }
 
+export async function expireDueApprovals(now = new Date()): Promise<number> {
+  const repo = new SqliteApprovalRepository(getDb());
+  const expired = await repo.expireOverdue(now.toISOString());
+  for (const approval of expired) eventBus.emit({ type: 'approval:update', approval });
+  return expired.length;
+}
+
 export function startReminderScheduler(intervalMs = 10000): () => void {
   const timer = setInterval(() => {
-    triggerDueReminders().catch((err) => {
+    Promise.all([
+      triggerDueReminders(),
+      expireDueApprovals(),
+    ]).catch((err) => {
       console.error('[reminders] scheduler failed', err);
     });
   }, intervalMs);

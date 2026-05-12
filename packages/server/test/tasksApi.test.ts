@@ -608,4 +608,59 @@ describe('task execution gate', () => {
     expect(res.statusCode).toBe(200);
     await app.close();
   });
+
+  it('allows feature task transition to in_progress after approved plan and approval', async () => {
+    const app = await buildApp();
+    const store = getStore();
+    await store.createAgent({ id: 'feature-agent', name: 'feature', runtime: 'claude', status: 'idle', createdAt: new Date().toISOString() });
+    const task = await store.createTask({ id: 'task-gate-3', channelId: 'general', title: 'Feature task gated', type: 'feature', status: 'backlog', assigneeId: 'feature-agent', creatorName: 'user' });
+    await store.updateTask(task.id, { status: 'assigned' });
+
+    const planCreate = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${task.id}/plan`,
+      payload: {
+        approach: 'Implement in small steps',
+        steps: [{ description: 'Code', verification: 'Tests pass', estimatedTools: ['editor'] }],
+      },
+    });
+    expect(planCreate.statusCode).toBe(201);
+
+    const submit = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${task.id}/plan/submit`,
+    });
+    expect(submit.statusCode).toBe(200);
+
+    const planApprove = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${task.id}/plan/approve`,
+      payload: { comment: 'ready' },
+    });
+    expect(planApprove.statusCode).toBe(200);
+
+    const pending = await app.inject({
+      method: 'GET',
+      url: '/api/approvals/pending',
+    });
+    expect(pending.statusCode).toBe(200);
+    const approvalId = pending.json().find((approval: { targetId: string }) => approval.targetId === task.id)?.id;
+    expect(approvalId).toBeTruthy();
+
+    const approve = await app.inject({
+      method: 'POST',
+      url: `/api/approvals/${approvalId}/approve`,
+      payload: { comment: 'approved' },
+    });
+    expect(approve.statusCode).toBe(200);
+
+    const start = await app.inject({
+      method: 'PATCH',
+      url: `/api/tasks/${task.id}`,
+      payload: { status: 'in_progress' },
+    });
+    expect(start.statusCode).toBe(200);
+    expect(start.json().status).toBe('in_progress');
+    await app.close();
+  });
 });

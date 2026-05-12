@@ -176,6 +176,9 @@ importers:
         specifier: ^4.0.1
         version: 4.0.1
     devDependencies:
+      '@crewden/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@testing-library/jest-dom':
         specifier: ^6.4.2
         version: 6.9.1

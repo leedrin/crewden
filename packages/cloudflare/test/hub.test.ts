@@ -320,7 +320,7 @@ describe('agent internal API', () => {
     const reviewTaskCreated = await SELF.fetch('https://hub.test/api/tasks', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ channelId: 'general', title: `cf review task ${crypto.randomUUID()}`, creatorName: 'user', assigneeId: agent.id }),
+      body: JSON.stringify({ channelId: 'general', title: `cf review task ${crypto.randomUUID()}`, creatorName: 'user', assigneeId: agent.id, type: 'docs' }),
     });
     const reviewTask = (await reviewTaskCreated.json()) as { id: string };
     const reviewReady = await SELF.fetch(`https://hub.test/api/tasks/${reviewTask.id}`, {
@@ -547,7 +547,7 @@ describe('input validation', () => {
     const created = await SELF.fetch('https://hub.test/api/tasks', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ channelId: 'general', title, creatorName: 'user', context: { goal: 'cloudflare task board' } }),
+      body: JSON.stringify({ channelId: 'general', title, creatorName: 'user', type: 'docs', context: { goal: 'cloudflare task board' } }),
     });
     expect(created.status).toBe(201);
     const task = (await created.json()) as { id: string; title: string; status: string };
@@ -615,7 +615,7 @@ describe('input validation', () => {
     const created = await SELF.fetch('https://hub.test/api/tasks', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ channelId: 'general', title: `cf public review ${crypto.randomUUID()}`, creatorName: 'user', context: { risks: ['medium'] } }),
+      body: JSON.stringify({ channelId: 'general', title: `cf public review ${crypto.randomUUID()}`, creatorName: 'user', type: 'docs', context: { risks: ['medium'] } }),
     });
     const task = (await created.json()) as { id: string };
     const ready = await SELF.fetch(`https://hub.test/api/tasks/${task.id}`, {

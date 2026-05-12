@@ -13,7 +13,7 @@ import { KnowledgePanel } from './components/KnowledgePanel.js';
 import { MobileTopBar } from './components/MobileTopBar.js';
 import { LoginView } from './components/LoginView.js';
 import type { Channel, Message, MessageThread, Agent, Machine, AgentActivity, VersionInfo, Task, Reminder, SearchMessageResult, GoalBrief, GoalAlignment, RuntimeStatus, Project, DeliveryBehavior, Plan, Approval } from './api.js';
-import { AuthError, WEB_COMMIT_SHA, WEB_VERSION, buildWsUrl, getProjects, getChannels, getMessages, getMessageThread, sendMessage, getAgents, getMachines, getAgentActivities, getHubVersion, getTasks, messageToTask, startGoalAlignment, getAgentReminders, createChannel, deleteChannel, searchMessages, setAuthFailureHandler, verifyAuthToken, getRuntimeStatus, reopenThread, resolveThread } from './api.js';
+import { AuthError, WEB_COMMIT_SHA, WEB_VERSION, buildWsUrl, getProjects, getChannels, getMessages, getMessageThread, sendMessage, getAgents, getMachines, getAgentActivities, getHubVersion, getTasks, getTaskPlan, getApprovals, messageToTask, startGoalAlignment, getAgentReminders, createChannel, deleteChannel, searchMessages, setAuthFailureHandler, verifyAuthToken, getRuntimeStatus, reopenThread, resolveThread } from './api.js';
 import { clearStoredAuthToken, getEffectiveAuthToken, markSignedOut, setStoredAuthToken } from './auth.js';
 import { notifyBrowser, requestPermission } from './notifications.js';
 
@@ -91,6 +91,8 @@ export function App() {
     setAgents([]);
     setMachines([]);
     setTasks([]);
+    setPlans({});
+    setApprovals([]);
     setRuntimeStatus(undefined);
     setHubVersion(undefined);
     setActivitiesByAgent({});
@@ -192,6 +194,13 @@ export function App() {
   const loadTasks = useCallback(async () => {
     const data = await getTasks({ projectId: selectedProjectId });
     setTasks(data);
+    const plansByTask = await Promise.all(data.map(async (task) => {
+      const plan = await getTaskPlan(task.id).catch(() => null);
+      return plan ? [task.id, plan] as const : null;
+    }));
+    setPlans(Object.fromEntries(plansByTask.filter((entry): entry is readonly [string, Plan] => entry !== null)));
+    const pendingApprovals = await getApprovals({ projectId: selectedProjectId, status: 'pending' }).catch(() => []);
+    setApprovals(pendingApprovals);
   }, [selectedProjectId]);
 
   const loadRuntimeStatus = useCallback(async () => {
@@ -476,8 +485,10 @@ export function App() {
         } else if (msg.type === 'goal:update') {
           // handled by goal panel refresh
         } else if (msg.type === 'plan:update') {
+          if ((msg.plan.projectId ?? 'default') !== selectedProjectId) return;
           setPlans((prev) => ({ ...prev, [msg.plan.taskId]: msg.plan }));
         } else if (msg.type === 'approval:update') {
+          if ((msg.approval.projectId ?? 'default') !== selectedProjectId) return;
           setApprovals((prev) => {
             const exists = prev.find((a) => a.id === msg.approval.id);
             if (exists) return prev.map((a) => (a.id === msg.approval.id ? msg.approval : a));
@@ -899,6 +910,12 @@ export function App() {
             agents={agents}
             plans={plans}
             approvals={approvals}
+            onPlanUpdated={(plan) => setPlans((prev) => ({ ...prev, [plan.taskId]: plan }))}
+            onApprovalUpdated={(approval) => setApprovals((prev) => {
+              const exists = prev.find((candidate) => candidate.id === approval.id);
+              if (exists) return prev.map((candidate) => (candidate.id === approval.id ? approval : candidate));
+              return [approval, ...prev];
+            })}
             onTaskUpdated={upsertTask}
             onTaskDeleted={(taskId) => setTasks((prev) => prev.filter((task) => task.id !== taskId))}
           />

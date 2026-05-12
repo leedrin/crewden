@@ -195,6 +195,7 @@ export class CrewdenHub extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     if (request.method === 'OPTIONS') return new Response(null, { headers: JSON_HEADERS });
     this.triggerDueReminders();
+    this.expireDueApprovals();
 
     const url = new URL(request.url);
     if (request.method === 'GET' && url.pathname === '/api/version') {
@@ -633,7 +634,7 @@ export class CrewdenHub extends DurableObject<Env> {
         this.ctx.storage.sql.exec(
           "INSERT INTO task_plans (id, project_id, task_id, status, approach, steps, risks, files_to_modify, files_to_create, tests_to_add, author_type, author_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
           planId,
-          parsed.data.projectId ?? 'default',
+          task.projectId ?? parsed.data.projectId ?? 'default',
           taskId,
           'draft',
           parsed.data.approach,
@@ -664,14 +665,21 @@ export class CrewdenHub extends DurableObject<Env> {
         return json(this.rowToPlan(updated));
       }
 
-      const taskPlanReviewMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/plan\/review$/);
+      const taskPlanReviewMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/plan\/(review|approve|reject)$/);
       if (taskPlanReviewMatch && request.method === 'POST') {
         const taskId = decodeURIComponent(taskPlanReviewMatch[1]);
+        const reviewAction = taskPlanReviewMatch[2];
         const rows = this.ctx.storage.sql.exec("SELECT * FROM task_plans WHERE task_id = ?", taskId).toArray();
         if (rows.length === 0) return json({ error: 'Plan not found' }, 404);
         const plan = this.rowToPlan(rows[0]);
         if (plan.status !== 'submitted') return json({ error: 'Plan must be in submitted status to review', currentStatus: plan.status }, 422);
-        const parsed = ReviewPlanRequestSchema.safeParse(await request.json());
+        const payload = await request.json().catch(() => ({}));
+        const parsed = reviewAction === 'review'
+          ? ReviewPlanRequestSchema.safeParse(payload)
+          : ReviewPlanRequestSchema.safeParse({
+            approved: reviewAction === 'approve',
+            comment: (payload as { comment?: string } | undefined)?.comment,
+          });
         if (!parsed.success) return json({ error: 'Invalid request body', issues: parsed.error.issues }, 400);
         const now = new Date().toISOString();
         const newStatus: PlanStatus = parsed.data.approved ? 'approved' : 'rejected';
@@ -686,15 +694,21 @@ export class CrewdenHub extends DurableObject<Env> {
         if (parsed.data.approved) {
           const task = this.getTask(taskId);
           if (task && shouldCreateApprovalOnPlanApproval(task.type)) {
-            const approvalId = 'approval-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-            this.ctx.storage.sql.exec(
-              "INSERT INTO approvals (id, project_id, type, target_id, status, requested_by_type, requested_by_id, reason, requested_at) VALUES (?, ?, 'task_execution', ?, 'pending', 'human', 'user', ?, ?)",
-              approvalId,
-              'default',
+            const pending = this.ctx.storage.sql.exec(
+              "SELECT id FROM approvals WHERE target_id = ? AND type = 'task_execution' AND status = 'pending' LIMIT 1",
               taskId,
-              `Plan approved for ${task.type} task, pending execution approval`,
-              now,
-            );
+            ).toArray();
+            if (pending.length === 0) {
+              const approvalId = 'approval-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+              this.ctx.storage.sql.exec(
+                "INSERT INTO approvals (id, project_id, type, target_id, status, requested_by_type, requested_by_id, reason, requested_at) VALUES (?, ?, 'task_execution', ?, 'pending', 'human', 'user', ?, ?)",
+                approvalId,
+                task.projectId ?? 'default',
+                taskId,
+                `Plan approved for ${task.type} task, pending execution approval`,
+                now,
+              );
+            }
           }
         }
         const updated = this.ctx.storage.sql.exec("SELECT * FROM task_plans WHERE id = ?", plan.id).toArray()[0];
@@ -702,13 +716,18 @@ export class CrewdenHub extends DurableObject<Env> {
       }
 
       if (request.method === 'GET' && url.pathname === '/api/approvals/pending') {
-        const rows = this.ctx.storage.sql.exec("SELECT * FROM approvals WHERE status = 'pending' ORDER BY requested_at DESC").toArray();
+        const projectId = url.searchParams.get('projectId');
+        const rows = projectId
+          ? this.ctx.storage.sql.exec("SELECT * FROM approvals WHERE status = 'pending' AND project_id = ? ORDER BY requested_at DESC", projectId).toArray()
+          : this.ctx.storage.sql.exec("SELECT * FROM approvals WHERE status = 'pending' ORDER BY requested_at DESC").toArray();
         return json(rows.map((r) => this.rowToApproval(r)));
       }
 
       if (request.method === 'GET' && url.pathname === '/api/approvals') {
         let sql = "SELECT * FROM approvals WHERE 1=1";
         const params: string[] = [];
+        const projectId = url.searchParams.get('projectId');
+        if (projectId) { sql += " AND project_id = ?"; params.push(projectId); }
         const targetId = url.searchParams.get('targetId');
         if (targetId) { sql += " AND target_id = ?"; params.push(targetId); }
         const typeFilter = url.searchParams.get('type');
@@ -1814,13 +1833,11 @@ export class CrewdenHub extends DurableObject<Env> {
     }
     if (patch.status === 'in_progress' && existing.status === 'assigned') {
       const planRows = this.ctx.storage.sql.exec("SELECT status FROM task_plans WHERE task_id = ?", taskId).toArray();
-      if (planRows.length > 0) {
-        const planStatus = planRows[0].status as PlanStatus;
-        const approvalRows = this.ctx.storage.sql.exec("SELECT status FROM approvals WHERE target_id = ? AND type = 'task_execution' ORDER BY requested_at DESC LIMIT 1", taskId).toArray();
-        const approvalStatus = approvalRows.length > 0 ? (approvalRows[0].status as ApprovalStatus) : undefined;
-        const gateResult = checkExecutionGate({ taskType: existing.type, planStatus, approvalStatus });
-        if (!gateResult.allowed) return json({ error: gateResult.reason }, 422);
-      }
+      const planStatus = planRows.length > 0 ? (planRows[0].status as PlanStatus) : undefined;
+      const approvalRows = this.ctx.storage.sql.exec("SELECT status FROM approvals WHERE target_id = ? AND type = 'task_execution' ORDER BY requested_at DESC LIMIT 1", taskId).toArray();
+      const approvalStatus = approvalRows.length > 0 ? (approvalRows[0].status as ApprovalStatus) : undefined;
+      const gateResult = checkExecutionGate({ taskType: existing.type, planStatus, approvalStatus });
+      if (!gateResult.allowed) return json({ error: gateResult.reason }, 422);
     }
     const task = this.updateTask(taskId, patch);
     if (!task) return json({ error: 'Task not found' }, 404);
@@ -3025,7 +3042,7 @@ export class CrewdenHub extends DurableObject<Env> {
     const r = row as Record<string, string | null>;
     return {
       id: r.id!,
-      projectId: r.project_id ?? undefined,
+      projectId: r.project_id === 'default' ? undefined : (r.project_id ?? undefined),
       taskId: r.task_id!,
       status: r.status as PlanStatus,
       approach: r.approach!,
@@ -3049,7 +3066,7 @@ export class CrewdenHub extends DurableObject<Env> {
     const r = row as Record<string, string | null>;
     return {
       id: r.id!,
-      projectId: r.project_id ?? undefined,
+      projectId: r.project_id === 'default' ? undefined : (r.project_id ?? undefined),
       type: r.type as ApprovalType,
       targetId: r.target_id!,
       status: r.status as ApprovalStatus,
@@ -3544,6 +3561,32 @@ export class CrewdenHub extends DurableObject<Env> {
       this.broadcast({ type: 'message:new', message });
       const updated = this.updateReminder(reminder.id, { status: 'triggered' });
       if (updated) this.broadcast({ type: 'reminder:update', reminder: updated });
+    }
+  }
+
+  private expireDueApprovals(now = new Date()): void {
+    const nowIso = now.toISOString();
+    const overdue = this.ctx.storage.sql.exec(
+      "SELECT * FROM approvals WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ?",
+      nowIso,
+    ).toArray();
+    if (overdue.length === 0) return;
+
+    this.ctx.storage.sql.exec(
+      "UPDATE approvals SET status = 'expired', responded_at = ?, comment = 'Auto-expired' WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ?",
+      nowIso,
+      nowIso,
+    );
+    for (const row of overdue) {
+      this.broadcast({
+        type: 'approval:update',
+        approval: {
+          ...this.rowToApproval(row),
+          status: 'expired',
+          respondedAt: nowIso,
+          comment: 'Auto-expired',
+        },
+      });
     }
   }
 

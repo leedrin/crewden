@@ -116,7 +116,7 @@ export async function taskRoutes(app: FastifyInstance) {
       const approvalRepo = new SqliteApprovalRepository(db);
       const plan = await planRepo.getByTaskId(existing.id);
       const approval = plan?.status === 'approved' && shouldCreateApprovalOnPlanApproval(existing.type)
-        ? await approvalRepo.getPendingForTarget(existing.id, 'task_execution')
+        ? await approvalRepo.getLatestForTarget(existing.id, 'task_execution')
         : undefined;
       const gateResult = checkExecutionGate({
         taskType: existing.type,

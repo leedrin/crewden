@@ -1,4 +1,4 @@
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, isNotNull, lte } from 'drizzle-orm';
 import type { LibSQLDatabase } from 'drizzle-orm/libsql';
 import type { Approval, ApprovalType, ApprovalStatus, ActorType } from '@crewden/shared';
 import { approvals as approvalsTable } from '../schema.js';
@@ -37,8 +37,9 @@ export class SqliteApprovalRepository {
     return row ? toApproval(row) : undefined;
   }
 
-  async list(filter: { type?: ApprovalType; targetId?: string; status?: ApprovalStatus } = {}): Promise<Approval[]> {
+  async list(filter: { projectId?: string; type?: ApprovalType; targetId?: string; status?: ApprovalStatus } = {}): Promise<Approval[]> {
     const conditions = [];
+    if (filter.projectId) conditions.push(eq(approvalsTable.projectId, filter.projectId));
     if (filter.type) conditions.push(eq(approvalsTable.type, filter.type));
     if (filter.targetId) conditions.push(eq(approvalsTable.targetId, filter.targetId));
     if (filter.status) conditions.push(eq(approvalsTable.status, filter.status));
@@ -62,6 +63,21 @@ export class SqliteApprovalRepository {
           eq(approvalsTable.status, 'pending'),
         ),
       )
+      .limit(1);
+    return row ? toApproval(row) : undefined;
+  }
+
+  async getLatestForTarget(targetId: string, type: ApprovalType): Promise<Approval | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(approvalsTable)
+      .where(
+        and(
+          eq(approvalsTable.targetId, targetId),
+          eq(approvalsTable.type, type),
+        ),
+      )
+      .orderBy(desc(approvalsTable.requestedAt))
       .limit(1);
     return row ? toApproval(row) : undefined;
   }
@@ -130,17 +146,36 @@ export class SqliteApprovalRepository {
     };
   }
 
-  async expireOverdue(): Promise<number> {
+  async expireOverdue(nowIso = new Date().toISOString()): Promise<Approval[]> {
+    const overdue = await this.db
+      .select()
+      .from(approvalsTable)
+      .where(
+        and(
+          eq(approvalsTable.status, 'pending'),
+          isNotNull(approvalsTable.expiresAt),
+          lte(approvalsTable.expiresAt, nowIso),
+        ),
+      );
+    if (overdue.length === 0) return [];
+
     const now = new Date().toISOString();
-    const result = await this.db
+    await this.db
       .update(approvalsTable)
       .set({ status: 'expired', respondedAt: now, comment: 'Auto-expired' })
       .where(
         and(
           eq(approvalsTable.status, 'pending'),
-          // SQLite string comparison works for ISO dates
+          isNotNull(approvalsTable.expiresAt),
+          lte(approvalsTable.expiresAt, nowIso),
         ),
       );
-    return result.rowsAffected ?? 0;
+
+    return overdue.map((row) => toApproval({
+      ...row,
+      status: 'expired',
+      respondedAt: now,
+      comment: 'Auto-expired',
+    }));
   }
 }

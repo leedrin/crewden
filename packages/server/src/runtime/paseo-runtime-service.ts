@@ -1,9 +1,15 @@
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadEnvFile } from 'node:process';
 import { nanoid } from 'nanoid';
 import type { Agent, AgentDelivery, AgentRuntimeConfig, WorkspaceEntry, WorkspaceError } from '@crewden/shared';
 import { toAgentRuntimeConfig } from './agent-runtime-config.js';
 import { PaseoDaemonMode } from '../agent-runtime-bridge/paseo-daemon-mode.js';
 import { getStore } from '../db.js';
 import type { RuntimeStatusSnapshot } from '../agent-runtime-bridge/types.js';
+
+bootstrapRuntimeEnv();
 
 export class PaseoRuntimeService {
   private readonly paseoBridge: PaseoDaemonMode;
@@ -205,3 +211,24 @@ export class PaseoRuntimeService {
 }
 
 export const paseoRuntimeService = new PaseoRuntimeService();
+
+function bootstrapRuntimeEnv(): void {
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(process.cwd(), '.env'),
+    resolve(currentDir, '.env'),
+    resolve(currentDir, '../.env'),
+    resolve(currentDir, '../../.env'),
+    resolve(currentDir, '../../../.env'),
+    resolve(currentDir, '../../../../.env'),
+  ];
+  for (const file of candidates) {
+    if (!existsSync(file)) continue;
+    try {
+      loadEnvFile(file);
+      return;
+    } catch {
+      // Ignore malformed files and continue probing next candidate.
+    }
+  }
+}
